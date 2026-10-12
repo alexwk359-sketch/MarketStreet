@@ -23,23 +23,26 @@ export const UI_SPRITES = [
 export type UiSprite = (typeof UI_SPRITES)[number];
 
 /**
- * Personajes 3D propios (scripts/furniture/characters.js), en hojas de 80×120 px por fotograma.
- * Clientes: fila 0 de frente, fila 1 de espaldas; columnas 0-7 caminar, 8 quieto, 9 alcanzar.
- * Cajeros: una fila; 0-1 reposo, 2-4 escanear, 5-6 saludar.
+ * Personajes 3D propios (scripts/furniture/characters.js), en hojas de 100×150 px por fotograma
+ * (2,5 veces el tamaño de juego). Clientes: fila 0 de frente, fila 1 de espaldas; las columnas
+ * están en POSE. Cajeros: una fila; 0-1 reposo, 2-4 escanear, 5-6 saludar.
  */
 export const CASHIER_VARIANTS = 6;
-export const CHARACTER_FRAME = { frameWidth: 80, frameHeight: 120 };
-export const CUSTOMER_COLUMNS = 10;
+export const CHARACTER_FRAME = { frameWidth: 100, frameHeight: 150 };
+export const CHARACTER_SCALE = 1 / 2.5;
+export const CUSTOMER_COLUMNS = 14;
+/** Columna de cada pose (coincide con CUSTOMER_POSE_COLUMNS de characters.js). */
+export const POSE = { idle: 8, reach: 9, idle2: 10, cheer: 11, angry: 12, pay: 13 } as const;
 export const cashierSheet = (i: number) => `${SPRITE_BASE}people/cashier-${i}.png`;
 
 /** Hojas de clientes por tipo (coinciden con CHARACTER_SETS de characters.js). */
 export const CHARACTER_SHEETS: Record<ArchetypeDef['sheet'], number> = {
-  customer: 24,
-  kid: 6,
-  senior: 4,
-  tourist: 4,
+  customer: 36,
+  kid: 8,
+  senior: 6,
+  tourist: 6,
   critic: 2,
-  thief: 2,
+  thief: 3,
 };
 export const characterSheet = (sheet: string, i: number) => `${SPRITE_BASE}people/${sheet}-${i}.png`;
 /** Clave de textura (y prefijo de animaciones) de una variante. */

@@ -2,6 +2,8 @@
 
 type Wave = OscillatorType;
 
+import { settings } from './settings';
+
 const MUTE_KEY = 'market-street-muted';
 
 class Sfx {
@@ -30,7 +32,7 @@ class Sfx {
 
   private tone(freq: number, start: number, duration: number, wave: Wave = 'sine', volume = 0.15, slideTo?: number) {
     const ctx = this.ctx;
-    if (!ctx || this.muted || ctx.state !== 'running') return;
+    if (!ctx || this.muted || settings.volume <= 0 || ctx.state !== 'running') return;
     const t = ctx.currentTime + start;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -38,7 +40,7 @@ class Sfx {
     osc.frequency.setValueAtTime(freq, t);
     if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + duration);
     gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(volume, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, volume * settings.volume), t + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
     osc.connect(gain).connect(ctx.destination);
     osc.start(t);

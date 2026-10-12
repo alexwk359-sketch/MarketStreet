@@ -5,7 +5,17 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
-const mat = (color, opts = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.65, ...opts });
+// Sombreado "toon" de tres tonos: con el contorno que se añade al renderizar, da un acabado de dibujo animado.
+const TOON_STEPS = (() => {
+  const t = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  t.needsUpdate = true;
+  return t;
+})();
+const mat = (color, opts = {}) => {
+  const { roughness: _r, metalness: _m, ...rest } = opts;
+  return new THREE.MeshToonMaterial({ color, gradientMap: TOON_STEPS, ...rest });
+};
 
 const SKINS = [0xffdfc4, 0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0x5c3a21];
 const HAIRS = [0x2b1d14, 0x4a2c1a, 0x8b4513, 0xd9a066, 0x111111, 0xb7410e, 0xa0a0a0, 0xf2d16b];
@@ -13,8 +23,8 @@ const TOPS = [0xe76f51, 0x2a9d8f, 0xe9c46a, 0x457b9d, 0x8338ec, 0xff006e, 0x06d6
 const BOTTOMS = [0x1d3557, 0x3d405b, 0x6c584c, 0x2b2d42, 0x588157, 0xbc6c25, 0x495057];
 const SHOES = [0xf8f9fa, 0x212529, 0x7f5539, 0xe63946, 0x3a86ff];
 
-const HAIR_STYLES = ['short', 'long', 'bun', 'ponytail', 'afro', 'spiky', 'bob', 'bald'];
-const TOP_STYLES = ['tshirt', 'tshirt', 'hoodie', 'dress', 'jacket'];
+const HAIR_STYLES = ['short', 'long', 'bun', 'ponytail', 'afro', 'spiky', 'bob', 'bald', 'curly', 'mohawk', 'braids', 'bangs', 'buzz'];
+const TOP_STYLES = ['tshirt', 'tshirt', 'hoodie', 'dress', 'jacket', 'striped'];
 const ACCESSORIES = ['none', 'none', 'glasses', 'cap', 'beanie', 'backpack', 'glasses', 'none'];
 
 /** Generador aleatorio con semilla: los personajes salen siempre iguales. */
@@ -48,6 +58,8 @@ export function customerSpec(seed) {
     accessory: pick(r, ACCESSORIES),
     accessoryColor: pick(r, TOPS),
     height: 0.94 + r() * 0.12,
+    facial: r() < 0.3 ? pick(r, ['beard', 'mustache', 'stubble']) : 'none',
+    extras: r() < 0.2 ? ['purse'] : [],
   };
 }
 
@@ -63,6 +75,7 @@ export function kidSpec(seed) {
     accessory: pick(r, ['cap', 'backpack', 'none', 'backpack']),
     height: 0.7,
     headScale: 1.35,
+    facial: 'none',
   };
 }
 
@@ -207,6 +220,32 @@ function buildHair(head, spec, m) {
       tail.rotation.x = 0.35;
       break;
     }
+    case 'buzz':
+      hairCap(head, R + 0.004, 1.3, m.hair, -0.3);
+      break;
+    case 'curly':
+      hairCap(head, R + 0.01, 1.3, m.hair);
+      for (let i = 0; i < 11; i++) {
+        const a = (i / 11) * Math.PI * 2;
+        const ring = i % 2 ? 0.13 : 0.09;
+        add(head, new THREE.SphereGeometry(0.055, 12, 10), m.hair, [Math.cos(a) * ring, 0.13 + (i % 3) * 0.015, Math.sin(a) * ring - 0.02]);
+      }
+      break;
+    case 'mohawk':
+      hairCap(head, R + 0.003, 1.25, m.hair, -0.3);
+      for (let i = 0; i < 5; i++) add(head, rbox(0.045, 0.12, 0.06, 0.02), m.hair, [0, 0.14 + Math.sin((i / 4) * Math.PI) * 0.03, 0.12 - i * 0.065]);
+      break;
+    case 'braids':
+      hairCap(head, R + 0.012, 1.35, m.hair);
+      for (const x of [-0.15, 0.15]) {
+        for (let k = 0; k < 3; k++) add(head, new THREE.SphereGeometry(0.04 - k * 0.004, 12, 10), m.hair, [x, -0.1 - k * 0.07, -0.02]);
+      }
+      break;
+    case 'bangs':
+      hairCap(head, R + 0.014, 1.45, m.hair);
+      add(head, rbox(0.3, 0.26, 0.09, 0.04), m.hair, [0, -0.06, -0.1]);
+      add(head, rbox(0.26, 0.07, 0.06, 0.03), m.hair, [0, 0.1, 0.13]).rotation.x = 0.3;
+      break;
     case 'afro':
       // Detrás y encima de la cabeza, para no tapar la cara.
       add(head, new THREE.SphereGeometry(0.215, 24, 18), m.hair, [0, 0.07, -0.085]);
@@ -242,6 +281,54 @@ function buildAccessory(head, torso, spec, m) {
       break;
     default:
       break;
+  }
+}
+
+/** Arco (media rosca) para sonrisas, cejas y ojos cerrados; `up` lo pone como una "u" invertida. */
+function arc(parent, radius, tube, material, [x, y, z], up = false) {
+  const mesh = add(parent, new THREE.TorusGeometry(radius, tube, 6, 16, Math.PI), material, [x, y, z]);
+  if (!up) mesh.rotation.z = Math.PI;
+  return mesh;
+}
+
+/** Cara: orejas, nariz, ojos con brillo, cejas, mejillas y boca según la expresión. */
+function buildFace(head, spec, m, expression) {
+  const white = mat(0xffffff);
+  const lip = mat(0x9d3b3b);
+  const brow = mat(spec.hairStyle === 'bald' ? 0x5c4033 : spec.hair);
+  for (const side of [-1, 1]) {
+    add(head, new THREE.SphereGeometry(0.035, 10, 8), m.skin, [side * 0.168, -0.01, 0]).scale.set(0.6, 1, 0.9);
+    const x = side * 0.062;
+    if (expression === 'happy') {
+      arc(head, 0.022, 0.008, m.dark, [x, 0.0, 0.158], true); // ojos cerrados de alegría
+    } else {
+      add(head, new THREE.SphereGeometry(0.025, 12, 10), m.dark, [x, 0.0, 0.153]).scale.set(1, 1.35, 0.6);
+      add(head, new THREE.SphereGeometry(0.008, 8, 6), white, [x + 0.008, 0.012, 0.168]);
+    }
+    const eyebrow = add(head, rbox(0.05, 0.012, 0.012, 0.005), brow, [x, 0.052, 0.155]);
+    eyebrow.rotation.z = expression === 'angry' ? side * 0.45 : side * -0.1;
+    if (expression === 'angry') eyebrow.position.y -= 0.01;
+    add(head, new THREE.SphereGeometry(0.024, 10, 8), mat(0xff8fa3, { transparent: true, opacity: 0.5 }), [side * 0.1, -0.045, 0.14]).scale.set(1.2, 0.7, 0.4);
+  }
+  add(head, new THREE.SphereGeometry(0.016, 10, 8), m.skin, [0, -0.02, 0.172]);
+  if (expression === 'happy') {
+    const mouth = add(head, new THREE.SphereGeometry(0.035, 14, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), lip, [0, -0.06, 0.15]);
+    mouth.scale.set(1.2, 0.9, 0.6);
+  } else if (expression === 'angry') {
+    arc(head, 0.025, 0.007, lip, [0, -0.085, 0.152], true);
+  } else {
+    arc(head, 0.025, 0.007, lip, [0, -0.06, 0.155]);
+  }
+  // Vello facial.
+  const hair = m.hair;
+  if (spec.facial === 'beard') {
+    const beard = add(head, new THREE.SphereGeometry(0.15, 20, 14, 0, Math.PI * 2, Math.PI * 0.55, Math.PI * 0.45), hair, [0, 0.0, 0.02]);
+    beard.scale.set(1.08, 1, 1.05);
+  }
+  if (spec.facial === 'beard' || spec.facial === 'mustache') add(head, rbox(0.08, 0.02, 0.02, 0.01), hair, [0, -0.04, 0.165]);
+  if (spec.facial === 'stubble') {
+    const stubble = add(head, new THREE.SphereGeometry(0.174, 20, 14, 0, Math.PI * 2, Math.PI * 0.6, Math.PI * 0.3), mat(spec.hair, { transparent: true, opacity: 0.35 }), [0, 0, 0]);
+    stubble.scale.set(1, 0.97, 0.95);
   }
 }
 
@@ -300,6 +387,13 @@ function buildExtras(head, torso, spec) {
       case 'backpack':
         add(torso, rbox(0.24, 0.28, 0.1, 0.04), mat(spec.trim), [0, 0.02, -0.15]);
         break;
+      case 'purse': {
+        const leather = mat(spec.accessoryColor ?? 0x7f5539);
+        add(torso, rbox(0.12, 0.1, 0.06, 0.02), leather, [0.19, 0.0, 0.05]);
+        const strap = add(torso, new THREE.TorusGeometry(0.2, 0.008, 6, 24), leather, [0.02, 0.2, 0.0]);
+        strap.rotation.set(0, 0, 0.6);
+        break;
+      }
       default:
         break;
     }
@@ -362,7 +456,8 @@ export function makeCharacter(spec, pose = {}) {
     add(torso, rbox(0.06, 0.3, 0.02, 0.01), m.trim, [0, 0.19, 0.096]);
     add(torso, rbox(0.3, 0.04, 0.2, 0.02), m.top, [0, 0.03, 0]);
   }
-  if (spec.top === 'polo' || spec.top === 'tshirt') add(torso, rbox(0.14, 0.03, 0.04, 0.01), m.trim, [0, 0.34, 0.07]);
+  if (spec.top === 'polo' || spec.top === 'tshirt' || spec.top === 'striped') add(torso, rbox(0.14, 0.03, 0.04, 0.01), m.trim, [0, 0.34, 0.07]);
+  if (spec.top === 'striped') for (const y of [0.1, 0.18, 0.26]) add(torso, rbox(0.305, 0.028, 0.195, 0.012), m.trim, [0, y, 0]);
   if (spec.apron) {
     add(torso, rbox(0.24, 0.36, 0.015, 0.01), mat(0x2d6a4f), [0, 0.1, 0.1]);
     add(torso, rbox(0.06, 0.035, 0.01, 0.005), mat(0xffffff), [0.06, 0.22, 0.11]); // chapa con el nombre
@@ -381,6 +476,7 @@ export function makeCharacter(spec, pose = {}) {
     arm.add(fore);
     add(fore, capsule(0.042, 0.1), m.skin, [0, -0.05, 0]);
     add(fore, new THREE.SphereGeometry(0.046, 14, 10), m.skin, [0, -0.13, 0]);
+    if (p.card && side === -1) add(fore, rbox(0.09, 0.006, 0.06, 0.004), mat(0x3a86ff), [0, -0.17, 0.02]);
     // Bastón en la mano derecha.
     if (spec.cane && side === -1) {
       add(fore, new THREE.CylinderGeometry(0.012, 0.012, 0.3, 8), mat(0x7f5539), [0, -0.28, 0.04]);
@@ -397,11 +493,7 @@ export function makeCharacter(spec, pose = {}) {
   head.scale.setScalar(spec.headScale ?? 1.12);
   torso.add(head);
   add(head, new THREE.SphereGeometry(0.172, 28, 20), m.skin).scale.set(1, 0.97, 0.95);
-  for (const x of [-0.06, 0.06]) {
-    add(head, new THREE.SphereGeometry(0.022, 10, 8), m.dark, [x, 0.0, 0.155]).scale.set(1, 1.3, 0.6);
-    add(head, new THREE.SphereGeometry(0.022, 10, 8), mat(0xff8fa3, { transparent: true, opacity: 0.55 }), [x * 1.6, -0.05, 0.14]).scale.set(1.2, 0.7, 0.4);
-  }
-  add(head, rbox(0.05, 0.012, 0.01, 0.005), mat(0x9d4b4b), [0, -0.065, 0.158]);
+  buildFace(head, spec, m, p.face ?? 'neutral');
   buildHair(head, spec, m);
   buildAccessory(head, torso, spec, m);
   buildExtras(head, torso, spec);
@@ -425,6 +517,18 @@ export const IDLE_POSE = { armLOut: 0.12, armROut: 0.12 };
 /** Mirando un estante: un brazo extendido hacia delante. */
 export const REACH_POSE = { armR: 1.25, elbowR: 0.1, armL: 0.1, lean: 0.08, headTilt: 0.12 };
 
+/** Respirando: segundo fotograma de reposo. */
+export const IDLE2_POSE = { armLOut: 0.14, armROut: 0.14, bob: 0.012, headTilt: -0.04 };
+/** Celebrando (propina, buena compra): brazos arriba y sonrisa. */
+export const CHEER_POSE = { armLOut: 2.6, armROut: 2.6, elbowL: 0.3, elbowR: 0.3, bob: 0.05, face: 'happy', headTilt: -0.1 };
+/** Enfadado: brazos rígidos, inclinado hacia atrás, ceño fruncido. */
+export const ANGRY_POSE = { armLOut: 0.35, armROut: 0.35, armL: -0.15, armR: -0.15, lean: -0.06, face: 'angry', headTilt: 0.1 };
+/** Pagando con tarjeta en la caja. */
+export const PAY_POSE = { armR: 1.05, elbowR: 0.35, armL: 0.1, card: true, face: 'happy', lean: 0.04 };
+
+/** Orden de columnas en las hojas de clientes (el juego usa los mismos índices). */
+export const CUSTOMER_POSE_COLUMNS = ['walk0', 'walk1', 'walk2', 'walk3', 'walk4', 'walk5', 'walk6', 'walk7', 'idle', 'reach', 'idle2', 'cheer', 'angry', 'pay'];
+
 /** Poses del cajero detrás del mostrador. */
 export const CASHIER_POSES = [
   { armL: 0.6, armR: 0.6, elbowL: 0.6, elbowR: 0.6 }, // reposo, manos sobre el mostrador
@@ -432,21 +536,21 @@ export const CASHIER_POSES = [
   { armL: 0.6, armR: 1.1, elbowL: 0.6, elbowR: 0.3, headTilt: 0.15 }, // escanear
   { armL: 0.6, armR: 0.9, elbowL: 0.6, elbowR: 0.8, armROut: 0.4, headTilt: 0.18 },
   { armL: 0.6, armR: 1.2, elbowL: 0.6, elbowR: 0.2, headTilt: 0.12 },
-  { armL: 0.5, armR: 0.2, armROut: 2.5, elbowR: 0.5, elbowL: 0.6, headTilt: -0.05 }, // saludar
-  { armL: 0.5, armR: 0.2, armROut: 2.2, elbowR: 0.9, elbowL: 0.6, headTilt: -0.05 },
+  { armL: 0.5, armR: 0.2, armROut: 2.5, elbowR: 0.5, elbowL: 0.6, headTilt: -0.05, face: 'happy' }, // saludar
+  { armL: 0.5, armR: 0.2, armROut: 2.2, elbowR: 0.9, elbowL: 0.6, headTilt: -0.05, face: 'happy' },
 ];
 
-export const CUSTOMER_VARIANTS = 24;
+export const CUSTOMER_VARIANTS = 36;
 export const CASHIER_VARIANTS = 6;
 
 /** Juegos de personajes de clientes: nombre de la hoja, cuántas variantes y su aspecto. */
 export const CHARACTER_SETS = [
   { name: 'customer', count: CUSTOMER_VARIANTS, spec: customerSpec },
-  { name: 'kid', count: 6, spec: kidSpec },
-  { name: 'senior', count: 4, spec: seniorSpec },
-  { name: 'tourist', count: 4, spec: touristSpec },
+  { name: 'kid', count: 8, spec: kidSpec },
+  { name: 'senior', count: 6, spec: seniorSpec },
+  { name: 'tourist', count: 6, spec: touristSpec },
   { name: 'critic', count: 2, spec: criticSpec },
-  { name: 'thief', count: 2, spec: thiefSpec },
+  { name: 'thief', count: 3, spec: thiefSpec },
 ];
 
 /** Direcciones de las hojas: de frente (hacia +x, abajo a la derecha) y de espaldas (hacia -z, arriba a la derecha). */

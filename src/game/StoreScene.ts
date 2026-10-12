@@ -23,7 +23,9 @@ import {
   CASHIER_VARIANTS,
   CHARACTER_FRAME,
   CUSTOMER_COLUMNS,
+  CHARACTER_SCALE,
   CHARACTER_SHEETS,
+  POSE,
   FURNITURE_SPRITES,
   STREET_SPRITES,
   UI_SPRITES,
@@ -37,11 +39,11 @@ import {
   uiSprite,
 } from './sprites';
 import { Atmosphere } from './atmosphere';
+import { settings } from './settings';
 import { Street } from './street';
 
 const WALL_HEIGHT = 70;
-/** Los fotogramas de personajes son el doble del tamaño de juego y tienen los pies al 90%. */
-const CHARACTER_SCALE = 0.5;
+/** Los fotogramas de personajes tienen los pies al 90% de su altura. */
 const CHARACTER_ORIGIN_Y = 0.9;
 /** Altura aproximada de la cabeza sobre los pies, en píxeles del juego. */
 const HEAD_TOP = 50;
@@ -163,6 +165,8 @@ interface CustomerView {
   facing: Facing;
   flip: boolean;
   last: Point;
+  /** Hasta cuándo celebra (ms de la escena), tras pagar con propina o una buena compra. */
+  cheerUntil: number;
 }
 
 interface DecorView {
@@ -240,6 +244,10 @@ export class StoreScene extends Phaser.Scene {
     for (const key of keys) {
       this.anims.create({ key: `${key}:walk-front`, frames: frames(key, walk), frameRate: 11, repeat: -1 });
       this.anims.create({ key: `${key}:walk-back`, frames: frames(key, walk.map((f) => f + CUSTOMER_COLUMNS)), frameRate: 11, repeat: -1 });
+      // Quietos respiran: alternan dos fotogramas.
+      for (const [facing, row] of [['front', 0], ['back', CUSTOMER_COLUMNS]] as const) {
+        this.anims.create({ key: `${key}:idle-${facing}`, frames: frames(key, [row + POSE.idle, row + POSE.idle2]), frameRate: 1.6, repeat: -1, yoyo: true });
+      }
     }
     for (let i = 0; i < CASHIER_VARIANTS; i++) {
       const key = `cash:${i}`;
@@ -255,11 +263,12 @@ export class StoreScene extends Phaser.Scene {
     const { w, h } = storeSize(this.controller.state);
     if (w !== this.size.w || h !== this.size.h) {
       this.size = { w, h };
-      this.street.layout(w, h);
+      this.street.layout(w, h, this.controller.state.storeName);
       this.atmosphere.setLights(this.street.lampHeads, { w, h });
       this.userZoom = 1;
       this.fitCamera();
     }
+    this.street.setStoreName(this.controller.state.storeName);
     this.street.update(Math.min(delta, 100) / 1000);
     this.atmosphere.update(this.controller.state);
     this.drawFloor();
@@ -700,7 +709,9 @@ export class StoreScene extends Phaser.Scene {
       this.setLabel(v, `${left}`, left <= 2 ? '#e76f51' : '#2d6a4f');
       v.label.setPosition(c.x, labelY);
     }
-    v.fire.setVisible(trending).setPosition(c.x + v.label.width / 2 + (d.order ? 18 : 9), labelY - 9);
+    v.label.setVisible(settings.labels || !!d.order || d.stock === 0);
+    v.truck.setVisible(v.truck.visible && v.label.visible);
+    v.fire.setVisible(trending && settings.labels).setPosition(c.x + v.label.width / 2 + (d.order ? 18 : 9), labelY - 9);
   }
 
   /** Cambiar el fondo de un texto lo vuelve a rasterizar: solo lo hacemos si cambia. */
@@ -742,7 +753,7 @@ export class StoreScene extends Phaser.Scene {
     const bubble = this.add.graphics();
     const bubbleIcon = this.add.image(0, 0, 'ui:question').setDisplaySize(16, 16).setVisible(false);
     const container = this.add.container(0, 0, [shadow, body, bag, crown, badge, bubble, bubbleIcon]);
-    const view: CustomerView = { container, shadow, body, bag, crown, badge, bubble, bubbleIcon, key, facing: 'front', flip: false, last: { x: c.x, y: c.y } };
+    const view: CustomerView = { container, shadow, body, bag, crown, badge, bubble, bubbleIcon, key, facing: 'front', flip: false, last: { x: c.x, y: c.y }, cheerUntil: 0 };
     this.customers.set(c.id, view);
     return view;
   }
@@ -756,6 +767,20 @@ export class StoreScene extends Phaser.Scene {
     const sx = dx - dy;
     const sy = dx + dy;
     return { facing: sy >= 0 ? 'front' : 'back', flip: sx < 0 };
+  }
+
+  /** Qué pose mostrar según lo que esté haciendo el cliente. */
+  private customerPose(c: Customer, v: CustomerView, time: number, walking: boolean): 'walk' | 'idle' | keyof typeof POSE {
+    if (time < v.cheerUntil) return 'cheer';
+    if (walking) return 'walk';
+    if (c.state === 'browsing') return 'reach';
+    if (c.state === 'lost' && c.timer < 1) return 'angry';
+    if (c.state === 'queue') {
+      // El primero de la cola paga con tarjeta mientras le cobran.
+      const r = this.controller.state.registers.find((x) => x.id === c.registerId);
+      if (r && r.serveTimer > 0 && Math.round(c.x) === r.x && Math.round(c.y) === r.y + 1) return 'pay';
+    }
+    return 'idle';
   }
 
   private updateCustomer(v: CustomerView, c: Customer, time: number) {
@@ -774,12 +799,16 @@ export class StoreScene extends Phaser.Scene {
     if (look) Object.assign(v, this.facingFor(look.dx, look.dy));
 
     const row = v.facing === 'front' ? 0 : CUSTOMER_COLUMNS;
-    if (walking) {
+    const pose = this.customerPose(c, v, time, walking);
+    if (pose === 'walk') {
       v.body.anims.timeScale = c.speed / 2.2;
       v.body.play(`${v.key}:walk-${v.facing}`, true);
+    } else if (pose === 'idle') {
+      v.body.anims.timeScale = 1;
+      v.body.play(`${v.key}:idle-${v.facing}`, true);
     } else {
       v.body.stop();
-      v.body.setFrame(row + (c.state === 'browsing' ? 9 : 8));
+      v.body.setFrame(row + POSE[pose]);
     }
     v.body.setPosition(p.x, p.y).setFlipX(v.flip);
 
@@ -841,6 +870,10 @@ export class StoreScene extends Phaser.Scene {
         this.fx.sale({ x: c.x, y: c.y - 40 }, e.amount, e.tip, e.gem, e.vip);
         const view = this.registers.get(r.id);
         if (view) view.waveUntil = this.time.now + 900;
+        // Con propina, o si era VIP o crítico, el cliente celebra la compra.
+        const customer = this.customers.get(e.customerId);
+        const kind = s.customers.find((x) => x.id === e.customerId)?.kind;
+        if (customer && (e.tip > 0 || e.vip || kind === 'critic')) customer.cheerUntil = this.time.now + 800;
         return;
       }
       case 'delivered': {

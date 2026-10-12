@@ -1,14 +1,17 @@
 import Phaser from 'phaser';
 import { Controller } from './game/controller';
 import { StoreScene } from './game/StoreScene';
+import { mountMenus } from './game/menus';
 import { mountUi } from './game/ui';
-import { loadGame } from './sim/save';
+import { hasSavedGame, loadGame } from './sim/save';
 import * as sim from './sim/sim';
 import './style.css';
 
+const hasSave = hasSavedGame();
 const { state, offline } = loadGame(Date.now(), Math.random);
 const controller = new Controller(state, offline);
-mountUi(controller);
+const menus = mountMenus(controller, hasSave);
+mountUi(controller, menus.openPause);
 
 const game = new Phaser.Game({
   type: Phaser.AUTO,

@@ -3,7 +3,8 @@ import type { OfflineSummary } from '../sim/offline';
 import { declineOrder, fulfillOrder } from '../sim/orders';
 import { WEATHER } from '../sim/world';
 import type { FurnitureRef } from '../sim/path';
-import { clearSave, saveGame } from '../sim/save';
+import { claimDaily, dailyReward, dailyStatus, localDate } from '../sim/daily';
+import { clearSave, deserialize, saveGame, serialize } from '../sim/save';
 import {
   buyDecor,
   buyDisplay,
@@ -15,11 +16,13 @@ import {
   orderStock,
   rushOrder,
   sellFurniture,
+  setPriceLevel,
+  setStoreName,
   tick,
   useStyle,
   type ActionResult,
 } from '../sim/sim';
-import { createInitialState, type GameState, type SimEvent } from '../sim/state';
+import { createInitialState, type DaySummary, type GameState, type PriceLevel, type SimEvent } from '../sim/state';
 import { claimTask } from '../sim/tasks';
 import { sfx } from './sound';
 
@@ -30,10 +33,14 @@ export type Mode =
   | { type: 'placeDecor'; decorId: string }
   | { type: 'move'; ref: FurnitureRef };
 
-export type PanelId = 'build' | 'decor' | 'tasks' | 'upgrades' | 'help';
+export type PanelId = 'build' | 'decor' | 'tasks' | 'upgrades' | 'stats';
 export type Panel = null | PanelId | { furniture: FurnitureRef };
 
-export type Modal = null | { type: 'levelUp'; level: number } | { type: 'offline'; summary: OfflineSummary };
+export type Modal =
+  | { type: 'levelUp'; level: number }
+  | { type: 'offline'; summary: OfflineSummary }
+  | { type: 'daily'; streakDay: number; reward: { coins: number; gems: number } }
+  | { type: 'dayEnd'; summary: DaySummary };
 
 export type ToastKind = 'info' | 'error' | 'good';
 
@@ -44,7 +51,10 @@ const AUTOSAVE_MS = 5000;
 export class Controller {
   mode: Mode = { type: 'idle' };
   panel: Panel = null;
-  modal: Modal = null;
+  /** Ventanas pendientes: se muestran de una en una. */
+  modals: Modal[] = [];
+  /** Con un menú abierto (inicio, ajustes...) la simulación se detiene. */
+  paused = false;
   toast: (msg: string, kind?: ToastKind) => void = () => {};
   private listeners = new Set<() => void>();
   private lastSave = 0;
@@ -53,7 +63,8 @@ export class Controller {
     public state: GameState,
     offline: OfflineSummary | null,
   ) {
-    if (offline && offline.minutes >= 1) this.modal = { type: 'offline', summary: offline };
+    if (offline && offline.minutes >= 1) this.modals.push({ type: 'offline', summary: offline });
+    this.checkDaily(Date.now());
   }
 
   onChange(fn: () => void) {
@@ -64,7 +75,31 @@ export class Controller {
     this.listeners.forEach((fn) => fn());
   }
 
+  get modal(): Modal | null {
+    return this.modals[0] ?? null;
+  }
+
+  /** Si hoy hay premio diario sin reclamar, lo pone en la cola de ventanas. */
+  checkDaily(now: number) {
+    const today = localDate(now);
+    const yesterday = localDate(now - 86_400_000);
+    const status = dailyStatus(this.state, today, yesterday);
+    if (!status.available || this.modals.some((m) => m.type === 'daily')) return;
+    this.modals.push({ type: 'daily', streakDay: status.streakDay, reward: dailyReward(status.streakDay, this.state.level) });
+  }
+
+  claimDaily() {
+    const now = Date.now();
+    const reward = claimDaily(this.state, localDate(now), localDate(now - 86_400_000));
+    if (reward) {
+      sfx.claim();
+      this.save();
+    }
+    this.closeModal();
+  }
+
   update(deltaMs: number, now: number) {
+    if (this.paused) return;
     // Si la pestaña estuvo oculta, saltamos el reloj hasta "ahora" (los pedidos
     // llegan igual) pero solo simulamos clientes durante un paso corto.
     const step = Math.min(deltaMs, MAX_STEP_MS);
@@ -122,6 +157,10 @@ export class Controller {
         case 'orderDone':
           sfx.claim();
           break;
+        case 'dayEnd':
+          this.modals.push({ type: 'dayEnd', summary: e.summary });
+          this.save();
+          break;
         case 'orderExpired':
           this.toast('El encargo ha caducado', 'error');
           break;
@@ -134,7 +173,7 @@ export class Controller {
           break;
         case 'levelUp':
           sfx.levelUp();
-          this.modal = { type: 'levelUp', level: e.level };
+          this.modals.push({ type: 'levelUp', level: e.level });
           this.save();
           break;
       }
@@ -153,7 +192,7 @@ export class Controller {
     this.state = createInitialState(Date.now());
     this.mode = { type: 'idle' };
     this.panel = null;
-    this.modal = null;
+    this.modals = [];
     this.notify();
   }
 
@@ -177,8 +216,49 @@ export class Controller {
   }
 
   closeModal() {
-    this.modal = null;
+    this.modals.shift();
     this.notify();
+  }
+
+  setPaused(paused: boolean) {
+    this.paused = paused;
+    this.notify();
+  }
+
+  /** Empieza de cero con el nombre de tienda elegido. */
+  newGame(storeName: string) {
+    this.reset();
+    setStoreName(this.state, storeName);
+    this.checkDaily(Date.now());
+    this.save();
+    this.notify();
+  }
+
+  renameStore(name: string) {
+    this.act(setStoreName(this.state, name), () => this.toast('Nombre de la tienda cambiado', 'good'));
+  }
+
+  setPriceLevel(displayId: number, level: PriceLevel) {
+    this.act(setPriceLevel(this.state, displayId, level), () => sfx.click());
+  }
+
+  /** Código de la partida para copiarlo en otro navegador. */
+  exportSave(): string {
+    return btoa(unescape(encodeURIComponent(serialize(this.state))));
+  }
+
+  importSave(code: string): boolean {
+    try {
+      const state = deserialize(decodeURIComponent(escape(atob(code.trim()))));
+      this.state = state;
+      this.modals = [];
+      this.panel = null;
+      this.save();
+      this.notify();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   startPlacing(mode: Mode) {

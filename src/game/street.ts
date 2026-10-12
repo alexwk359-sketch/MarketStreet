@@ -3,7 +3,7 @@
 import Phaser from 'phaser';
 import type { Point } from './iso';
 import { at, box, diamond, FONT, raise, TEXT_RESOLUTION, tileCenter } from './draw';
-import { CHARACTER_SHEETS, STREET_VEHICLES, characterKey } from './sprites';
+import { CHARACTER_SCALE, CHARACTER_SHEETS, STREET_VEHICLES, characterKey } from './sprites';
 
 interface Walker {
   sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
@@ -43,7 +43,19 @@ export class Street {
   }
 
   /** Redibuja la calle para una tienda de w×h casillas. */
-  layout(w: number, h: number) {
+  private signText: Phaser.GameObjects.Text | null = null;
+  private storeName = '';
+
+  /** Cambia el nombre del cartel (si ha cambiado). */
+  setStoreName(name: string) {
+    if (name === this.storeName || !this.signText) return;
+    this.storeName = name;
+    this.signText.setText(name.toUpperCase());
+    this.drawSignBoard();
+  }
+
+  layout(w: number, h: number, storeName = 'Market Street') {
+    this.storeName = storeName;
     this.w = w;
     this.h = h;
     const g = this.ground.clear();
@@ -64,7 +76,7 @@ export class Street {
     for (const tx of trees) this.addTree(tx, h + 0.55, tx < 0 ? 'pine' : 'tree');
     for (let y = 1; y < h; y += 3) this.addTree(w + 1.6, y, y % 2 ? 'tree' : 'pine');
     for (const lx of [-0.5, w * 0.45]) this.addLamp(lx, h + 1);
-    this.addSign(h);
+    this.addSign(h, storeName);
   }
 
   private addTree(x: number, y: number, kind: 'tree' | 'pine') {
@@ -88,18 +100,32 @@ export class Street {
   }
 
   /** Cartel de la tienda junto a la puerta. */
-  private addSign(h: number) {
+  private signBoard: Phaser.GameObjects.Graphics | null = null;
+  private signAt: Point = { x: 0, y: 0 };
+
+  private addSign(h: number, name: string) {
     // En la acera, junto a la esquina izquierda de la tienda, para no tapar el interior.
-    const p = tileCenter(-1.3, h + 0.15);
-    const g = this.scene.add.graphics();
-    g.fillStyle(0x5c4033).fillRect(p.x - 2, p.y - 46, 4, 46);
-    g.fillStyle(0xe76f51).fillRoundedRect(p.x - 60, p.y - 74, 120, 30, 8);
-    g.lineStyle(2, 0xffffff).strokeRoundedRect(p.x - 57, p.y - 71, 114, 24, 6);
-    const t = this.scene.add
-      .text(p.x, p.y - 59, 'MARKET STREET', { fontFamily: FONT, fontSize: '12px', fontStyle: 'bold', color: '#fff', resolution: TEXT_RESOLUTION })
+    this.signAt = tileCenter(-1.3, h + 0.15);
+    const p = this.signAt;
+    this.signBoard = this.scene.add.graphics();
+    this.signText = this.scene.add
+      .text(p.x, p.y - 59, name.toUpperCase(), { fontFamily: FONT, fontSize: '12px', fontStyle: 'bold', color: '#fff', resolution: TEXT_RESOLUTION })
       .setOrigin(0.5);
-    this.props.add(this.scene.add.container(0, 0, [g, t]).setDepth(h + 1));
+    this.drawSignBoard();
+    this.props.add(this.scene.add.container(0, 0, [this.signBoard, this.signText]).setDepth(h + 1));
   }
+
+  /** El cartel se ensancha según el nombre de la tienda. */
+  private drawSignBoard() {
+    if (!this.signBoard || !this.signText) return;
+    const p = this.signAt;
+    const half = Math.max(60, this.signText.width / 2 + 12);
+    this.signBoard.clear();
+    this.signBoard.fillStyle(0x5c4033).fillRect(p.x - 2, p.y - 46, 4, 46);
+    this.signBoard.fillStyle(0xe76f51).fillRoundedRect(p.x - half, p.y - 74, half * 2, 30, 8);
+    this.signBoard.lineStyle(2, 0xffffff).strokeRoundedRect(p.x - half + 3, p.y - 71, half * 2 - 6, 24, 6);
+  }
+
 
   update(dt: number) {
     if (this.w === 0) return;
@@ -137,7 +163,7 @@ export class Street {
       // Por la calle pasa de todo: adultos, niños, abuelos y turistas.
       const sheet = Phaser.Utils.Array.GetRandom(PEDESTRIAN_SHEETS);
       const key = characterKey(sheet, Phaser.Math.Between(0, CHARACTER_SHEETS[sheet] - 1));
-      sprite = this.scene.add.sprite(0, 0, key).setOrigin(0.5, 0.9).setScale(0.5).setFlipX(dir < 0);
+      sprite = this.scene.add.sprite(0, 0, key).setOrigin(0.5, 0.9).setScale(CHARACTER_SCALE).setFlipX(dir < 0);
       (sprite as Phaser.GameObjects.Sprite).play(`${key}:walk-${dir > 0 ? 'front' : 'back'}`);
     }
     sprite.setAlpha(0);

@@ -5,9 +5,13 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import {
   CASHIER_POSES,
   CASHIER_VARIANTS,
+  ANGRY_POSE,
   CHARACTER_SETS,
+  CHEER_POSE,
   DIRECTIONS,
+  IDLE2_POSE,
   IDLE_POSE,
+  PAY_POSE,
   REACH_POSE,
   WALK_FRAMES,
   cashierSpec,
@@ -106,10 +110,13 @@ window.renderSprites = () => {
 // Personajes: hojas de sprites con varios fotogramas y direcciones
 // ---------------------------------------------------------------------------
 
-/** Cada fotograma mide 80×120 px (el doble que en el juego) y los pies quedan al 90% de la altura. */
-const FRAME_W = 80;
-const FRAME_H = 120;
-const PX_PER_UNIT = SIZE / (2 * HALF_W);
+/** Cada fotograma mide 100×150 px (2,5 veces el tamaño de juego) y los pies quedan al 90% de la altura. */
+const FRAME_W = 100;
+const FRAME_H = 150;
+const PX_PER_UNIT = (SIZE / (2 * HALF_W)) * 1.25;
+/** Grosor del contorno de dibujo animado, en píxeles del fotograma. */
+const OUTLINE = 2.5;
+const OUTLINE_COLOR = '#2b1d14';
 
 function characterCamera() {
   const halfW = FRAME_W / 2 / PX_PER_UNIT;
@@ -122,6 +129,32 @@ function characterCamera() {
   return camera;
 }
 
+/**
+ * Dibuja un fotograma con contorno: la silueta en color oscuro desplazada en 16 direcciones
+ * y encima el personaje. Así se lee bien a tamaño pequeño, como en los juegos de dibujos.
+ */
+function drawOutlined(ctx, source, x, y) {
+  const frame = document.createElement('canvas');
+  frame.width = FRAME_W;
+  frame.height = FRAME_H;
+  const f = frame.getContext('2d');
+  f.imageSmoothingQuality = 'high';
+  f.drawImage(source, 0, 0, FRAME_W, FRAME_H);
+  const silhouette = document.createElement('canvas');
+  silhouette.width = FRAME_W;
+  silhouette.height = FRAME_H;
+  const sctx = silhouette.getContext('2d');
+  sctx.drawImage(frame, 0, 0);
+  sctx.globalCompositeOperation = 'source-in';
+  sctx.fillStyle = OUTLINE_COLOR;
+  sctx.fillRect(0, 0, FRAME_W, FRAME_H);
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    ctx.drawImage(silhouette, x + Math.cos(a) * OUTLINE, y + Math.sin(a) * OUTLINE);
+  }
+  ctx.drawImage(frame, x, y);
+}
+
 /** Hoja: filas = direcciones, columnas = poses. */
 function renderSheet(renderer, env, camera, spec, poses, directions) {
   renderer.setSize(FRAME_W * SUPERSAMPLE, FRAME_H * SUPERSAMPLE);
@@ -129,7 +162,6 @@ function renderSheet(renderer, env, camera, spec, poses, directions) {
   sheet.width = FRAME_W * poses.length;
   sheet.height = FRAME_H * directions.length;
   const ctx = sheet.getContext('2d');
-  ctx.imageSmoothingQuality = 'high';
   directions.forEach((angle, row) => {
     poses.forEach((pose, col) => {
       const s = scene(false, env);
@@ -137,7 +169,7 @@ function renderSheet(renderer, env, camera, spec, poses, directions) {
       character.rotation.y = angle;
       s.add(character);
       renderer.render(s, camera);
-      ctx.drawImage(renderer.domElement, col * FRAME_W, row * FRAME_H, FRAME_W, FRAME_H);
+      drawOutlined(ctx, renderer.domElement, col * FRAME_W, row * FRAME_H);
     });
   });
   return sheet.toDataURL('image/png');
@@ -146,7 +178,8 @@ function renderSheet(renderer, env, camera, spec, poses, directions) {
 window.renderSheets = () => {
   const { renderer, env } = setup();
   const camera = characterCamera();
-  const customerPoses = [...Array.from({ length: WALK_FRAMES }, (_, f) => walkPose(f)), IDLE_POSE, REACH_POSE];
+  // Mismo orden que CUSTOMER_POSE_COLUMNS: caminar (8), quieto, alcanzar, respirar, celebrar, enfado, pagar.
+  const customerPoses = [...Array.from({ length: WALK_FRAMES }, (_, f) => walkPose(f)), IDLE_POSE, REACH_POSE, IDLE2_POSE, CHEER_POSE, ANGRY_POSE, PAY_POSE];
   const out = [];
   for (const set of CHARACTER_SETS) {
     for (let v = 0; v < set.count; v++) {

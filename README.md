@@ -5,6 +5,8 @@ La investigación sobre el original y el diseño están en [`docs/investigacion-
 
 ## Qué se puede hacer
 
+- **Pantalla de inicio y menús:** pon nombre a tu tienda (sale en el cartel de la calle). Hay pausa y ajustes con volumen, efectos de clima, anochecer, etiquetas, cambio de nombre y copia de seguridad (exportar e importar la partida con un código).
+
 - **Tienda isométrica en una calle viva**, con acera, tráfico, peatones y el camión de reparto.
 - **13 tipos de expositor y 117 artículos**, repartidos en dos secciones:
   - **Tienda:** ropa, ferretería, electrónica, juguetes y libros, accesorios, deportes.
@@ -22,6 +24,10 @@ La investigación sobre el original y el diseño están en [`docs/investigacion-
 - **Clima:** sol, nubes, lluvia, ola de calor y nieve. Cambian cuánta gente viene y qué busca (con calor, helados y bebidas; con frío, abrigos, pan y queso). Se ven lluvia y nieve en pantalla.
 - **Día y noche:** un día dura 16 minutos. El mediodía trae más clientes y la noche menos; de noche se encienden las farolas y la tienda.
 - **Encargos especiales:** el barrio pide muchas unidades de un artículo con plazo; se entregan desde la tarjeta del encargo para una gran recompensa.
+- **Precio por expositor:** barato (−20%, atrae más clientes y los alegra), normal o caro (+30%, pero 1 de cada 4 clientes se echa atrás).
+- **Resumen de cada día** al amanecer: ventas, ingresos, propinas, clientes perdidos y lo más vendido.
+- **Premio diario** por jugar días seguidos (racha de 7 días, con diamantes).
+- **Estadísticas:** las cifras de hoy frente a ayer, un gráfico de ingresos por día, lo más vendido y el historial de la tienda.
 - **Tendencias:** cada pocos minutos una categoría se vende un 25% más cara.
 - **Felicidad y propinas:** la felicidad sube con las ventas y la decoración, y atrae más clientes. Por encima del 70%, los clientes dejan propina.
 - **Cajas registradoras** (hasta 3), cada una con su cajero o cajera animados.
@@ -46,8 +52,8 @@ npm run build      # typecheck + build de producción en dist/
 
 | Carpeta | Contenido |
 |---|---|
-| `src/sim/` | Lógica del juego en TypeScript puro, sin Phaser: catálogo, estado, simulación, caminos (`path.ts`), tipos de cliente (`archetypes.ts`), clima y hora (`world.ts`), encargos (`orders.ts`), tareas, progreso sin jugar, guardado y tests. |
-| `src/game/` | Render isométrico con Phaser 3: `StoreScene`, la calle (`street.ts`), el clima y la luz (`atmosphere.ts`) y los efectos (`effects.ts`). Además, la interfaz en el DOM (`ui.ts`), el sonido (`sound.ts`) y el `Controller` que une todo. |
+| `src/sim/` | Lógica del juego en TypeScript puro, sin Phaser: catálogo, estado, simulación, caminos (`path.ts`), tipos de cliente (`archetypes.ts`), clima y hora (`world.ts`), encargos (`orders.ts`), días y resúmenes (`days.ts`), premio diario (`daily.ts`), tareas, progreso sin jugar, guardado y tests. |
+| `src/game/` | Render isométrico con Phaser 3: `StoreScene`, la calle (`street.ts`), el clima y la luz (`atmosphere.ts`) y los efectos (`effects.ts`). Además, la interfaz en el DOM (`ui.ts`, `menus.ts`, `statsPanel.ts`), los ajustes (`settings.ts`), el sonido (`sound.ts`) y el `Controller` que une todo. |
 | `public/sprites/` | Todos los sprites del juego (ver *Gráficos*). |
 | `scripts/` | Generadores de sprites. |
 | `docs/` | Investigación y diseño. |
@@ -59,7 +65,8 @@ Desde la consola del navegador, `marketStreet.controller.state` muestra el estad
 
 - **Muebles, cajas registradoras, decoración tipo mueble y quesos:** modelados en 3D para este juego en [`scripts/furniture/models.js`](scripts/furniture/models.js) (three.js) y renderizados en vista isométrica 2:1, con luces y sombras.
 - **Clientes, peatones y cajeros:** personajes 3D propios ([`scripts/furniture/characters.js`](scripts/furniture/characters.js)) en hojas de sprites animadas:
-  - 24 clientes distintos (piel, pelo, ropa, gafas, gorras, mochilas…), con ciclo de caminar de 8 fotogramas, de frente y de espaldas, más las poses quieto y alcanzar un estante.
+  - Estilo de dibujo animado: sombreado de tres tonos y contorno, caras con cejas, ojos con brillo, nariz, mejillas y boca que cambia con la expresión.
+  - 36 clientes distintos (13 peinados, barbas, ropa lisa o a rayas, gafas, gorras, mochilas, bolsos…). Cada uno tiene un ciclo de caminar de 8 fotogramas, de frente y de espaldas, y poses de respirar, alcanzar un estante, pagar con tarjeta, celebrar y enfadarse.
   - Personajes propios para cada tipo de cliente: niños, abuelos (algunos con bastón), turistas (sombrero de paja y cámara), críticos (boina y bufanda) y ladrones (antifaz, rayas y saco).
   - 6 cajeros con el uniforme de la tienda, que esperan, escanean al cobrar y saludan al terminar.
 
@@ -68,6 +75,7 @@ Desde la consola del navegador, `marketStreet.controller.state` muestra el estad
   node scripts/render_furniture.mjs                 # todo
   node scripts/render_furniture.mjs --only=people   # solo personajes
   ```
+  Las hojas de personajes se pasan después a PNG con paleta (`scripts/optimize_sprites.py`) para que pesen unas 5 veces menos.
 - **Productos, coches, árboles e iconos:** [Microsoft Fluent Emoji](https://github.com/microsoft/fluentui-emoji) en estilo 3D, descargados y reducidos con:
   ```bash
   python3 scripts/fetch_assets.py

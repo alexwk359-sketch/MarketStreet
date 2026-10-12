@@ -5,6 +5,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { chromium } from 'playwright';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -44,3 +45,5 @@ for (const { name, dataUrl } of sprites) {
   console.log(`ok  ${name}.png`);
 }
 await browser.close();
+// Las hojas de personajes se pasan a PNG con paleta para que pesen mucho menos.
+if (only !== 'furniture') spawnSync('python3', [join(root, 'scripts', 'optimize_sprites.py'), join(outDir, 'people')], { stdio: 'inherit' });

@@ -50,6 +50,7 @@ export function deserialize(json: string): GameState {
   const displays = (data.displays as Display[]).map((d) => ({
     ...d,
     reserved: 0,
+    priceLevel: d.priceLevel ?? 0,
     ...(knownItem(d.itemId) ? {} : { itemId: null, stock: 0 }),
     order:
       d.order && knownItem(d.order.itemId)
@@ -86,6 +87,14 @@ export function loadGame(now: number, rng: Rng): LoadResult {
     console.warn('No se pudo cargar la partida, empezando de cero', err);
   }
   return { state: createInitialState(now), offline: null };
+}
+
+export function hasSavedGame(): boolean {
+  try {
+    return localStorage.getItem(SAVE_KEY) !== null;
+  } catch {
+    return false;
+  }
 }
 
 export function saveGame(state: GameState) {

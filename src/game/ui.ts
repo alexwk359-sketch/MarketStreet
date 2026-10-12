@@ -16,51 +16,51 @@ import {
 } from '../sim/catalog';
 import type { FurnitureRef } from '../sim/path';
 import {
+  PRICE_LEVELS,
   capacity,
   decorHappiness,
   deliveryMs,
+  displayPrice,
   happiness,
   maxDisplays,
   maxRegisters,
   registerPrice,
   rushCost,
-  salePrice,
   sellValue,
   serveSeconds,
   upgradeLevel,
   xpForLevel,
 } from '../sim/sim';
-import type { GameState } from '../sim/state';
+import type { GameState, PriceLevel } from '../sim/state';
 import { orderStockAvailable } from '../sim/orders';
+import { DAILY_REWARDS } from '../sim/daily';
 import { activeTasks, claimableCount, isTaskDone, TASKS } from '../sim/tasks';
 import { dayPeriod, PERIODS, weatherOf, type DayPeriod, type WeatherKind } from '../sim/world';
 import type { Controller, PanelId, ToastKind } from './controller';
 import { formatTime } from './format';
 import { sfx } from './sound';
+import { $, coins, fmt, gems, img, ui } from './html';
 import { decorSprite, furnitureSprite, itemSprite, uiSprite, type UiSprite } from './sprites';
+import { statsPanel } from './statsPanel';
 
-const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
-const img = (src: string, cls = 'icon') => `<img class="${cls}" src="${src}" alt="" draggable="false">`;
-const ui = (name: UiSprite, cls?: string) => img(uiSprite(name), cls);
-const fmt = (n: number) => n.toLocaleString('es-ES');
-const coins = (n: number) => `${fmt(n)} ${ui('coin')}`;
-const gems = (n: number) => `${fmt(n)} ${ui('gem')}`;
 /** El sprite 3D del mueble; en tamaño icono se recorta para que se vea grande. */
 const displayIcon = (kind: DisplayKind) => furnitureSprite(kind);
 const hex = (n: number) => n.toString(16).padStart(6, '0');
 const swatch = (s: StyleDef) => `<span class="card-img swatch" style="--a:#${hex(s.colors[0])};--b:#${hex(s.colors[1])}"></span>`;
 
 type DecorTab = 'items' | 'floors' | 'walls';
+type BuildTab = 'store' | 'food' | 'local';
 
 /** Estado propio de la interfaz (no se guarda en la partida). */
 const view = {
   decorTab: 'items' as DecorTab,
+  buildTab: 'store' as BuildTab,
   confirmSell: '',
   lastPanelHtml: '',
   lastModalHtml: '',
 };
 
-export function mountUi(controller: Controller) {
+export function mountUi(controller: Controller, openMenu: () => void) {
   const hud = $('#hud');
   const panel = $('#panel');
   const placing = $('#placing');
@@ -81,9 +81,10 @@ export function mountUi(controller: Controller) {
   window.addEventListener('pointerdown', () => sfx.unlock(), { capture: true });
 
   $('#toolbar').addEventListener('click', (e) => {
-    const tool = (e.target as HTMLElement).closest<HTMLElement>('[data-tool]')?.dataset.tool as PanelId | undefined;
+    const tool = (e.target as HTMLElement).closest<HTMLElement>('[data-tool]')?.dataset.tool as PanelId | 'menu' | undefined;
     if (!tool) return;
     sfx.click();
+    if (tool === 'menu') return openMenu();
     view.confirmSell = '';
     controller.openPanel(controller.panel === tool ? null : tool);
   });
@@ -119,6 +120,14 @@ export function mountUi(controller: Controller) {
       case 'style':
         controller.useStyle(id!);
         break;
+      case 'build-tab':
+        view.buildTab = id as BuildTab;
+        sfx.click();
+        render();
+        break;
+      case 'price':
+        controller.setPriceLevel(Number(display), Number(id) as PriceLevel);
+        break;
       case 'tab':
         view.decorTab = id as DecorTab;
         sfx.click();
@@ -151,9 +160,6 @@ export function mountUi(controller: Controller) {
       case 'claim':
         controller.claim(id!);
         break;
-      case 'reset':
-        if (confirm('¿Seguro que quieres borrar la partida y empezar de cero?')) controller.reset();
-        break;
     }
   });
 
@@ -162,7 +168,13 @@ export function mountUi(controller: Controller) {
   });
 
   modal.addEventListener('click', (e) => {
-    if ((e.target as HTMLElement).closest('[data-action="close-modal"]') || e.target === modal) {
+    const target = e.target as HTMLElement;
+    // El premio diario se reclama también al tocar fuera: no se pierde por un despiste.
+    if (target.closest('[data-action="claim-daily"]') || (e.target === modal && controller.modal?.type === 'daily')) {
+      controller.claimDaily();
+      return;
+    }
+    if (target.closest('[data-action="close-modal"]') || e.target === modal) {
       sfx.click();
       controller.closeModal();
     }
@@ -290,7 +302,7 @@ function panelHtml(c: Controller): string {
   if (p === 'decor') return decorPanel(s);
   if (p === 'tasks') return tasksPanel(s);
   if (p === 'upgrades') return upgradesPanel(s);
-  if (p === 'help') return HELP_HTML;
+  if (p === 'stats') return statsPanel(s);
   const ref = p.furniture;
   if (ref.kind === 'display') return displayPanel(s, ref.id);
   if (ref.kind === 'register') return registerPanel(s, ref.id);
@@ -336,12 +348,14 @@ function buildPanel(s: GameState): string {
         button('expand', 'Ampliar', blocker(s, next.unlockLevel, next.price)), next.unlockLevel > s.level)
     : '<p class="muted">La tienda ya tiene el tamaño máximo.</p>';
 
+  const tab = (id: BuildTab, label: string) =>
+    `<button class="tab ${view.buildTab === id ? 'on' : ''}" data-action="build-tab" data-id="${id}">${label}</button>`;
+  const body =
+    view.buildTab === 'local'
+      ? `<h3>Cajas <small>${s.registers.length} / ${maxRegisters(s.level)}</small></h3>${register}<h3>Local</h3>${expansion}`
+      : `<p class="muted">Expositores: <b>${s.displays.length} / ${max}</b>${full ? ' · sube de nivel para tener más hueco' : ''}</p>${displayCards(view.buildTab === 'store' ? 'store' : 'food')}`;
   return `<h2>${ui('build')} Construir</h2>
-    <p class="muted">Expositores: <b>${s.displays.length} / ${max}</b>${full ? ' · sube de nivel para tener más hueco' : ''}</p>
-    <h3>Tienda</h3>${displayCards('store')}
-    <h3>Alimentación</h3>${displayCards('food')}
-    <h3>Cajas <small>${s.registers.length} / ${maxRegisters(s.level)}</small></h3>${register}
-    <h3>Local</h3>${expansion}`;
+    <div class="tabs">${tab('store', 'Tienda')}${tab('food', 'Alimentación')}${tab('local', 'Cajas y local')}</div>${body}`;
 }
 
 function decorPanel(s: GameState): string {
@@ -433,16 +447,25 @@ function displayPanel(s: GameState, id: number): string {
       <button data-action="rush" data-display="${d.id}" ${s.gems < cost ? 'disabled' : ''}>${ui('rocket')} Ya · ${gems(cost)}</button></span>`;
   }
   const trending = s.trend?.kind === d.kind;
+  const level = d.priceLevel ?? 0;
+  const priceHints: Record<PriceLevel, string> = {
+    [-1]: 'Barato: −20% de precio, atrae más clientes y los pone contentos.',
+    [0]: 'Normal: el precio de siempre.',
+    [1]: 'Caro: +30% de precio, pero 1 de cada 4 clientes se echa atrás.',
+  };
+  const pricing = `<div class="pricing"><span>Precio</span><div class="segmented">${([-1, 0, 1] as PriceLevel[])
+    .map((l) => `<button class="${l === level ? 'on' : ''}" data-action="price" data-display="${d.id}" data-id="${l}">${PRICE_LEVELS[l].name}</button>`)
+    .join('')}</div></div><p class="muted small">${priceHints[level]}</p>`;
   const items = ITEMS.filter((i) => i.display === d.kind).map((i) => {
     const busy = d.order ? 'En camino' : d.stock > 0 && d.itemId !== i.id ? 'Vende lo actual' : d.stock + i.batchSize > cap ? 'Lleno' : '';
-    const price = salePrice(s, i);
+    const price = Math.round(displayPrice(s, i, d));
     const profit = i.batchSize * price - i.batchCost;
     return card(img(itemSprite(i.id), 'card-img'), i.name,
       `${i.batchSize} uds · ${ui('truck')} ${formatTime(deliveryMs(s, i))} · vende a ${price}${trending ? ` ${ui('fire')}` : ''} · ganas ${fmt(profit)}`,
       coins(i.batchCost), button('order', 'Pedir', blocker(s, i.unlockLevel, i.batchCost, busy), { display: d.id, id: i.id }), i.unlockLevel > s.level);
   });
   return `<h2>${img(displayIcon(d.kind), 'icon furniture')} ${def.name}${trending ? ` <span class="chip trend">${ui('fire')} En tendencia</span>` : ''}</h2>
-    <p>${status}</p>${furnitureActions(s, { kind: 'display', id: d.id })}${items.join('')}`;
+    <p>${status}</p>${furnitureActions(s, { kind: 'display', id: d.id })}${pricing}${items.join('')}`;
 }
 
 function registerPanel(s: GameState, id: number): string {
@@ -472,26 +495,6 @@ function card(picture: string, name: string, detail: string, price: string, acti
   </div>`;
 }
 
-const HELP_HTML = `
-  <h2>¿Cómo se juega?</h2>
-  <ol class="help">
-    <li><b>Toca un expositor</b> y pide mercancía. El camión tarda un rato; con diamantes llega al momento.</li>
-    <li>Los <b>clientes</b> llegan por la acera, buscan un artículo, lo cogen y pagan en la caja.</li>
-    <li>Si no encuentran lo que buscan o la cola es muy larga, se van enfadados y baja la <b>felicidad</b>.</li>
-    <li>La felicidad atrae más clientes y, por encima del 70%, te dejan <b>propinas</b>. Decora para subirla.</li>
-    <li>Atento a la <b>tendencia</b>: esa categoría se vende un 25% más cara.</li>
-    <li>Los clientes <b>VIP</b> (con corona) pagan el triple y a veces dejan un diamante.</li>
-    <li>Completa las <b>tareas</b> del encargado y compra <b>mejoras</b> para crecer más rápido.</li>
-    <li>Hay muchos tipos de cliente: <b>con lista</b> (compran varias cosas), <b>niños</b>, <b>abuelos</b> (lentos pero pacientes), <b>turistas</b> (pagan más) y <b>críticos</b>: si salen contentos, la tienda se hace viral.</li>
-    <li>¡Ojo con los <b>ladrones</b>! Si ves a uno huyendo con la sirena encima, tócalo para atraparlo.</li>
-    <li>El <b>tiempo</b> y la <b>hora</b> cambian la clientela: con calor se venden helados; con lluvia, ropa y pan; de noche viene menos gente.</li>
-    <li>Atiende los <b>encargos especiales</b>: pide muchas unidades a tiempo y entrégalas desde la tarjeta para una gran recompensa.</li>
-    <li>Toca un mueble para <b>moverlo o venderlo</b>. Arrastra para mover la vista; usa la rueda o pellizca para hacer zoom.</li>
-  </ol>
-  <p class="muted">La partida se guarda sola en este navegador. Mientras no juegas, los pedidos llegan y la tienda sigue vendiendo (más despacio).</p>
-  <button data-action="reset" class="danger">Reiniciar partida</button>
-`;
-
 // ---------------------------------------------------------------------------
 // Modales
 // ---------------------------------------------------------------------------
@@ -508,6 +511,34 @@ function modalContent(c: Controller): string {
     return `<div class="dialog">${ui('store', 'hero')}<h2>¡Bienvenido de vuelta!</h2>
       <p>Has estado fuera ${time}.</p>${result}
       <button data-action="close-modal">¡A trabajar!</button></div>`;
+  }
+  if (m.type === 'daily') {
+    const days = DAILY_REWARDS.map((r, i) => {
+      const day = i + 1;
+      const cycleDay = ((m.streakDay - 1) % DAILY_REWARDS.length) + 1;
+      const cls = day < cycleDay ? 'done' : day === cycleDay ? 'today' : '';
+      return `<div class="day ${cls}"><small>Día ${day}</small>${ui(r.gems > 0 ? 'gem' : 'coin')}${day === cycleDay ? '<b>¡Hoy!</b>' : ''}</div>`;
+    }).join('');
+    return `<div class="dialog">${ui('gift', 'hero')}<h2>Premio diario</h2>
+      <p>${m.streakDay > 1 ? `¡Llevas <b>${m.streakDay} días seguidos</b> jugando!` : 'Vuelve cada día para que el premio crezca.'}</p>
+      <div class="streak">${days}</div>
+      <p class="reward-big">${coins(m.reward.coins)}${m.reward.gems ? ` ${gems(m.reward.gems)}` : ''}</p>
+      <button data-action="claim-daily">Reclamar</button></div>`;
+  }
+  if (m.type === 'dayEnd') {
+    const d = m.summary;
+    const best = d.best ? ITEMS.find((i) => i.id === d.best!.itemId) : null;
+    return `<div class="dialog">${ui('sunrise', 'hero')}<h2>Fin del día ${d.day}</h2>
+      <div class="summary">
+        <div><span>Ventas</span><b>${fmt(d.sold)}</b></div>
+        <div><span>Ingresos</span><b>${coins(d.earned)}</b></div>
+        <div><span>Propinas</span><b>${coins(d.tips)}</b></div>
+        <div><span>Clientes perdidos</span><b>${fmt(d.lost)}</b></div>
+        ${d.ordersDone ? `<div><span>Encargos</span><b>${fmt(d.ordersDone)}</b></div>` : ''}
+        ${d.thievesCaught ? `<div><span>Ladrones atrapados</span><b>${fmt(d.thievesCaught)}</b></div>` : ''}
+      </div>
+      ${best ? `<p class="best-day">${img(itemSprite(best.id), 'icon big')} Lo más vendido: <b>${best.name}</b> (${fmt(d.best!.count)})</p>` : ''}
+      <button data-action="close-modal">Empezar un nuevo día</button></div>`;
   }
   const level = m.level;
   const unlock = (src: string, name: string, furniture = false) => `<div>${img(src, furniture ? 'unlock furniture' : 'unlock')}<span>${name}</span></div>`;

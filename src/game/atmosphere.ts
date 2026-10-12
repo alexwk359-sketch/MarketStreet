@@ -5,6 +5,7 @@ import type { GameState } from '../sim/state';
 import { darkness, dayPhase, weatherOf } from '../sim/world';
 import { FX_DEPTH, tileCenter } from './draw';
 import type { Point } from './iso';
+import { settings } from './settings';
 
 const OVERLAY_DEPTH = FX_DEPTH - 3;
 const GLOW_DEPTH = FX_DEPTH - 2;
@@ -77,9 +78,9 @@ export class Atmosphere {
     for (const r of [this.overlay, this.warm]) r.setPosition(view.x - margin, view.y - margin).setSize(view.width + margin * 2, view.height + margin * 2);
     this.zone.setTo(view.x - 100, view.y - 150, view.width + 200, view.height + 150);
 
-    const weather = weatherOf(state).kind;
-    const dark = darkness(state.time);
-    const phase = dayPhase(state.time);
+    const weather = settings.weatherFx ? weatherOf(state).kind : 'sunny';
+    const dark = settings.dayNightFx ? darkness(state.time) : 0;
+    const phase = settings.dayNightFx ? dayPhase(state.time) : 0.3;
     // Atardecer anaranjado alrededor de 0,6-0,7 del día.
     const dusk = Math.max(0, 1 - Math.abs(phase - 0.64) / 0.08);
 

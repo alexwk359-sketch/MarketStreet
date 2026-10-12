@@ -27,7 +27,11 @@ export interface Display {
   /** Unidades ya apartadas por clientes que van de camino. */
   reserved: number;
   order: StockOrder | null;
+  /** Política de precios: -1 barato, 0 normal, 1 caro. */
+  priceLevel: PriceLevel;
 }
+
+export type PriceLevel = -1 | 0 | 1;
 
 export interface Register {
   id: number;
@@ -60,6 +64,10 @@ export interface Customer {
   wants: string[];
   /** Lo que ya lleva para pagar. */
   basket: string[];
+  /** Lo que costará la cesta (cada artículo al precio de su expositor al cogerlo). */
+  basketValue: number;
+  /** Ha cogido algo de un expositor barato: sale más contento. */
+  bargain: boolean;
   /** Casillas por segundo. */
   speed: number;
   displayId: number | null;
@@ -76,8 +84,9 @@ export interface Customer {
 }
 
 export type SimEvent =
-  | { type: 'sale'; amount: number; tip: number; vip: boolean; gem: boolean; registerId: number; x: number; y: number }
-  | { type: 'unhappy'; x: number; y: number; reason: 'missing' | 'queue'; critic: boolean }
+  | { type: 'sale'; amount: number; tip: number; vip: boolean; gem: boolean; registerId: number; customerId: number; x: number; y: number }
+  | { type: 'unhappy'; x: number; y: number; reason: UnhappyReason; critic: boolean }
+  | { type: 'dayEnd'; summary: DaySummary }
   | { type: 'pickup'; displayId: number; customerId: number; itemId: string }
   | { type: 'delivered'; displayId: number; itemId: string }
   | { type: 'autoOrder'; displayId: number; itemId: string }
@@ -92,6 +101,33 @@ export type SimEvent =
   | { type: 'orderNew' }
   | { type: 'orderDone'; coins: number }
   | { type: 'orderExpired' };
+
+export type UnhappyReason = 'missing' | 'queue' | 'price';
+
+/** Resumen de un día de juego. */
+export interface DaySummary {
+  day: number;
+  sold: number;
+  earned: number;
+  tips: number;
+  lost: number;
+  ordersDone: number;
+  thievesCaught: number;
+  /** Artículo más vendido del día (o null). */
+  best: { itemId: string; count: number } | null;
+}
+
+/** Foto de las estadísticas al empezar el día, para calcular el resumen al terminarlo. */
+export interface DayStart {
+  day: number;
+  sold: number;
+  earned: number;
+  tips: number;
+  lost: number;
+  ordersDone: number;
+  thievesCaught: number;
+  soldByItem: Record<string, number>;
+}
 
 export interface Stats {
   sold: number;
@@ -108,6 +144,7 @@ export interface Stats {
   ordersDone: number;
   listServed: number;
   criticsHappy: number;
+  daysClosed: number;
   soldByItem: Record<string, number>;
 }
 
@@ -137,6 +174,14 @@ export interface GameState {
   nextOrderAt: number;
   /** Hasta cuándo dura el efecto "viral" de un crítico contento. */
   boostUntil: number;
+  /** Nombre de la tienda (sale en el cartel). */
+  storeName: string;
+  /** Estadísticas al empezar el día de juego actual. */
+  dayStart: DayStart | null;
+  /** Últimos días cerrados, del más antiguo al más reciente. */
+  history: DaySummary[];
+  /** Premio diario (días reales): último día reclamado (AAAA-MM-DD) y racha. */
+  daily: { lastClaim: string; streak: number };
   claimedTasks: string[];
   customers: Customer[];
   spawnTimer: number;
@@ -175,6 +220,7 @@ export const emptyStats = (): Stats => ({
   ordersDone: 0,
   listServed: 0,
   criticsHappy: 0,
+  daysClosed: 0,
   soldByItem: {},
 });
 
@@ -188,7 +234,7 @@ export function createInitialState(now: number): GameState {
     level: 1,
     mood: 50,
     expansion: 0,
-    displays: [{ id: 1, kind: 'rack', x: 3, y: 2, itemId: null, stock: 0, reserved: 0, order: null }],
+    displays: [{ id: 1, kind: 'rack', x: 3, y: 2, itemId: null, stock: 0, reserved: 0, order: null, priceLevel: 0 }],
     registers: [{ id: 2, x: 7, y: 5, serveTimer: 0 }],
     decor: [],
     floor: 'wood',
@@ -200,6 +246,10 @@ export function createInitialState(now: number): GameState {
     specialOrder: null,
     nextOrderAt: 0,
     boostUntil: 0,
+    storeName: 'Market Street',
+    dayStart: null,
+    history: [],
+    daily: { lastClaim: '', streak: 0 },
     claimedTasks: [],
     customers: [],
     spawnTimer: 2,

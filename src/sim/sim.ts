@@ -22,6 +22,7 @@ import {
   type FurnitureRef,
 } from './path';
 import { ARCHETYPES, THIEF_FLEE_SPEED, pickArchetype, type CustomerKind } from './archetypes';
+import { updateDay } from './days';
 import { updateOrders } from './orders';
 import type { Rng } from './rng';
 import { updateWeather, weatherDemand, worldCustomers } from './world';
@@ -33,6 +34,8 @@ import {
   type Customer,
   type Display,
   type GameState,
+  type PriceLevel,
+  type UnhappyReason,
   type Point,
   type Register,
 } from './state';
@@ -99,6 +102,18 @@ export const spawnInterval = (state: GameState) =>
 
 export const isTrending = (state: GameState, item: ItemDef) => state.trend?.kind === item.display;
 
+/** Multiplicador de precio y de interés de los clientes según la política de precios del expositor. */
+export const PRICE_LEVELS: Record<PriceLevel, { name: string; price: number; demand: number }> = {
+  [-1]: { name: 'Barato', price: 0.8, demand: 1.6 },
+  [0]: { name: 'Normal', price: 1, demand: 1 },
+  [1]: { name: 'Caro', price: 1.3, demand: 0.6 },
+};
+/** Probabilidad de que un cliente no compre algo caro después de mirarlo. */
+const EXPENSIVE_REFUSAL = 0.25;
+
+/** Precio de un artículo en un expositor concreto (con su política de precios). */
+export const displayPrice = (state: GameState, item: ItemDef, d: Display) => salePrice(state, item) * PRICE_LEVELS[d.priceLevel ?? 0].price;
+
 export const salePrice = (state: GameState, item: ItemDef) =>
   Math.round(item.salePrice * (isTrending(state, item) ? 1 + TREND_BONUS : 1));
 
@@ -134,7 +149,7 @@ export function buyDisplay(state: GameState, kind: DisplayKind, x: number, y: nu
   const error = placementError(state, 'display', x, y);
   if (error) return fail(error);
   spend(state, def.price);
-  state.displays.push({ id: state.nextId++, kind, x, y, itemId: null, stock: 0, reserved: 0, order: null });
+  state.displays.push({ id: state.nextId++, kind, x, y, itemId: null, stock: 0, reserved: 0, order: null, priceLevel: 0 });
   return ok;
 }
 
@@ -233,6 +248,22 @@ export function orderStock(state: GameState, displayId: number, itemId: string):
   return ok;
 }
 
+export function setPriceLevel(state: GameState, displayId: number, level: PriceLevel): ActionResult {
+  const display = displayById(state, displayId);
+  if (!display) return fail('Expositor no encontrado');
+  display.priceLevel = level;
+  return ok;
+}
+
+export const MAX_STORE_NAME = 22;
+
+export function setStoreName(state: GameState, name: string): ActionResult {
+  const clean = name.trim().replace(/\s+/g, ' ').slice(0, MAX_STORE_NAME);
+  if (!clean) return fail('El nombre no puede estar vacío');
+  state.storeName = clean;
+  return ok;
+}
+
 export function rushOrder(state: GameState, displayId: number): ActionResult {
   const display = displayById(state, displayId);
   if (!display?.order) return fail('No hay ningún pedido en camino');
@@ -304,9 +335,10 @@ export function tick(state: GameState, dtMs: number, rng: Rng): void {
   updateTrend(state, rng);
   updateWeather(state, rng);
   updateOrders(state, rng);
+  updateDay(state);
   updateSpawning(state, dt, rng);
   const queues = buildQueues(state);
-  for (const c of [...state.customers]) updateCustomer(state, c, dt, queues);
+  for (const c of [...state.customers]) updateCustomer(state, c, dt, queues, rng);
   updateRegisters(state, dt, queues, rng);
   autoRestock(state);
 }
@@ -379,7 +411,9 @@ function chooseDesire(state: GameState, kind: CustomerKind, rng: Rng, exclude: s
   const prefers = ARCHETYPES[kind].prefers;
   const weight = (id: string) => {
     const display = itemById(id).display;
-    return weatherDemand(state, display) * (prefers.includes(display) ? 3 : 1);
+    // Los expositores baratos atraen más miradas; los caros, menos.
+    const price = Math.max(...state.displays.filter((d) => d.itemId === id).map((d) => PRICE_LEVELS[d.priceLevel ?? 0].demand), 1e-3);
+    return weatherDemand(state, display) * (prefers.includes(display) ? 3 : 1) * price;
   };
 
   // El ladrón solo va a por lo que ve en los estantes.
@@ -437,6 +471,8 @@ export function spawnCustomer(
     itemId: desire,
     wants: [],
     basket: [],
+    basketValue: 0,
+    bargain: false,
     speed: def.speed,
     displayId: null,
     registerId: null,
@@ -510,6 +546,7 @@ function returnBasket(state: GameState, c: Customer) {
     if (d) d.stock++;
   }
   c.basket = [];
+  c.basketValue = 0;
   c.carrying = false;
 }
 
@@ -594,7 +631,7 @@ function buildQueues(state: GameState): Map<number, Queue> {
   return queues;
 }
 
-function updateCustomer(state: GameState, c: Customer, dt: number, queues: Map<number, Queue>) {
+function updateCustomer(state: GameState, c: Customer, dt: number, queues: Map<number, Queue>, rng: Rng) {
   c.age += dt;
   const arrived = walk(c, dt);
   switch (c.state) {
@@ -618,22 +655,23 @@ function updateCustomer(state: GameState, c: Customer, dt: number, queues: Map<n
       if (c.timer > 0) return;
       const d = displayById(state, c.displayId);
       if (!d) return leave(state, c);
-      d.stock--;
       d.reserved = Math.max(0, d.reserved - 1);
+      // Algunos ven el precio alto y lo dejan (los VIP y los ladrones no miran el precio).
+      if (d.priceLevel === 1 && c.kind !== 'vip' && c.kind !== 'thief' && rng() < EXPENSIVE_REFUSAL) {
+        if (c.basket.length === 0 && c.wants.length === 0) {
+          unhappy(state, c, 'price');
+          return leave(state, c);
+        }
+        return continueShopping(state, c);
+      }
+      d.stock--;
       c.carrying = true;
       c.basket.push(c.itemId);
+      c.basketValue += displayPrice(state, itemById(c.itemId), d);
+      if (d.priceLevel === -1) c.bargain = true;
       state.events.push({ type: 'pickup', displayId: d.id, customerId: c.id, itemId: c.itemId });
       if (c.kind === 'thief') return flee(state, c);
-      // Con lista: a por lo siguiente que haya; lo que no encuentre, se lo salta.
-      while (c.wants.length > 0) {
-        if (goToItem(state, c, c.wants.shift()!, c)) return;
-      }
-      c.state = 'queue';
-      c.registerId = shortestQueue(state).id;
-      // `timer` sirve de turno en la cola: quien llegó antes, paga antes.
-      c.timer = state.time;
-      c.waited = 0;
-      return;
+      return continueShopping(state, c);
     }
     case 'queue': {
       const q = queues.get(c.registerId ?? -1);
@@ -678,11 +716,25 @@ function updateCustomer(state: GameState, c: Customer, dt: number, queues: Map<n
 }
 
 /** Un cliente se va descontento; si es un crítico, la mala reseña pesa mucho más. */
-function unhappy(state: GameState, c: Customer, reason: 'missing' | 'queue') {
-  const penalty = c.kind === 'critic' ? CRITIC_MOOD : reason === 'queue' ? QUEUE_MOOD_PENALTY : LOST_MOOD_PENALTY;
+function unhappy(state: GameState, c: Customer, reason: UnhappyReason) {
+  const penalty = c.kind === 'critic' ? CRITIC_MOOD : reason === 'queue' ? QUEUE_MOOD_PENALTY : reason === 'price' ? 1 : LOST_MOOD_PENALTY;
   state.mood = clamp(state.mood - penalty, 0, 100);
   state.stats.lost++;
   state.events.push({ type: 'unhappy', x: c.x, y: c.y, reason, critic: c.kind === 'critic' });
+}
+
+/** Tras coger (o descartar) algo: a por lo siguiente de la lista, o a la caja. */
+function continueShopping(state: GameState, c: Customer) {
+  // Con lista: a por lo siguiente que haya; lo que no encuentre, se lo salta.
+  while (c.wants.length > 0) {
+    if (goToItem(state, c, c.wants.shift()!, c)) return;
+  }
+  if (c.basket.length === 0) return leave(state, c);
+  c.state = 'queue';
+  c.registerId = shortestQueue(state).id;
+  // `timer` sirve de turno en la cola: quien llegó antes, paga antes.
+  c.timer = state.time;
+  c.waited = 0;
 }
 
 const isBlockedAt = (state: GameState, c: Customer) => blockedTiles(state).has(`${Math.round(c.x)},${Math.round(c.y)}`);
@@ -710,16 +762,16 @@ function completeSale(state: GameState, c: Customer, r: Register, rng: Rng) {
   let xp = 0;
   for (const id of c.basket) {
     const item = itemById(id);
-    amount += Math.round(salePrice(state, item) * def.price);
     xp += item.xp;
     s.soldByItem[id] = (s.soldByItem[id] ?? 0) + 1;
     if (isTrending(state, item)) s.trendSold++;
   }
+  amount = Math.round(c.basketValue * def.price);
   const tip = happiness(state) >= TIP_HAPPINESS && rng() < 0.25 ? Math.ceil(amount * 0.25) : 0;
   const gem = c.vip && rng() < 0.5;
   state.coins += amount + tip;
   if (gem) state.gems++;
-  state.mood = clamp(state.mood + (c.vip ? 3 : SALE_MOOD_BONUS), 0, 100);
+  state.mood = clamp(state.mood + (c.vip ? 3 : SALE_MOOD_BONUS) + (c.bargain ? 1 : 0), 0, 100);
   s.sold += c.basket.length;
   s.earned += amount;
   s.tips += tip;
@@ -732,9 +784,10 @@ function completeSale(state: GameState, c: Customer, r: Register, rng: Rng) {
     s.criticsHappy++;
     state.events.push({ type: 'criticHappy', x: c.x, y: c.y });
   }
-  state.events.push({ type: 'sale', amount, tip, vip: c.vip, gem, registerId: r.id, x: c.x, y: c.y });
+  state.events.push({ type: 'sale', amount, tip, vip: c.vip, gem, registerId: r.id, customerId: c.id, x: c.x, y: c.y });
   addXp(state, xp * (c.vip ? 2 : 1));
   c.basket = [];
+  c.basketValue = 0;
   c.carrying = false;
   leave(state, c);
 }
