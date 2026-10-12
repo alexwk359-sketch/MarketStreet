@@ -40,6 +40,7 @@ describe('pedidos', () => {
     const s = createInitialState(T0);
     expect(orderStock(s, 1, 'hammer')).toMatchObject({ ok: false }); // estantería requerida
     expect(orderStock(s, 1, 'jeans')).toMatchObject({ ok: false }); // nivel 2
+    expect(orderStock(s, 1, 'ball')).toMatchObject({ ok: false }); // mesa, nivel 3
     expect(orderStock(s, 99, 'tshirt')).toMatchObject({ ok: false });
     orderStock(s, 1, 'tshirt');
     expect(orderStock(s, 1, 'tshirt')).toMatchObject({ ok: false, error: 'Ya hay un pedido en camino' });
@@ -98,6 +99,7 @@ describe('clientes', () => {
 
     run(s, 20);
     expect(s.displays[0]).toMatchObject({ stock: 9, reserved: 0 });
+    expect(s.events).toContainEqual({ type: 'pickup', displayId: 1, customerId: c.id, itemId: 'tshirt' });
     expect(s.coins).toBe(150 + ITEMS[0].salePrice);
     expect(s.stats.sold).toBe(1);
     expect(s.customers).toHaveLength(0);
@@ -147,5 +149,14 @@ describe('guardado', () => {
     expect(loaded.time).toBe(T0 + 60_000);
     tick(loaded, 0, seededRng(1));
     expect(loaded.displays[0].stock).toBe(20); // el pedido llegó mientras no jugábamos
+  });
+
+  it('descarta artículos y decoración que ya no existen', () => {
+    const s = createInitialState(T0);
+    Object.assign(s.displays[0], { itemId: 'drill', stock: 5, order: { itemId: 'drill', readyAt: T0 } });
+    s.decor.push({ id: 50, decorId: 'lamp', x: 0, y: 0 }, { id: 51, decorId: 'plant', x: 1, y: 0 });
+    const loaded = deserialize(serialize(s), T0);
+    expect(loaded.displays[0]).toMatchObject({ itemId: null, stock: 0, order: null });
+    expect(loaded.decor.map((d) => d.decorId)).toEqual(['plant']);
   });
 });

@@ -1,4 +1,5 @@
-import { createInitialState, type GameState } from './state';
+import { DECOR, ITEMS } from './catalog';
+import { createInitialState, type Display, type GameState, type PlacedDecor } from './state';
 
 const SAVE_KEY = 'market-street-save';
 
@@ -11,8 +12,16 @@ export function serialize(state: GameState): string {
 export function deserialize(json: string, now: number): GameState {
   const data = JSON.parse(json);
   if (data.version !== 1) throw new Error(`Versión de partida no soportada: ${data.version}`);
+  // Partidas antiguas pueden tener artículos o decoración que ya no existen en el catálogo.
+  const knownItem = (id: string | null) => id !== null && ITEMS.some((i) => i.id === id);
+  const displays = (data.displays as Display[]).map((d) => ({
+    ...d,
+    ...(knownItem(d.itemId) ? {} : { itemId: null, stock: 0 }),
+    order: d.order && knownItem(d.order.itemId) ? d.order : null,
+  }));
+  const decor = (data.decor as PlacedDecor[]).filter((d) => DECOR.some((x) => x.id === d.decorId));
   // El reloj avanza hasta "ahora" para que los pedidos lleguen aunque no estuvieras jugando.
-  return { ...data, time: Math.max(data.time, now), customers: [], queue: [], events: [], serveTimer: 0 };
+  return { ...data, displays, decor, time: Math.max(data.time, now), customers: [], queue: [], events: [], serveTimer: 0 };
 }
 
 export function loadGame(now: number): GameState {

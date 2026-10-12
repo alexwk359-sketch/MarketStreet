@@ -202,6 +202,7 @@ function updateCustomer(state: GameState, c: Customer, dt: number) {
       display.reserved--;
       c.carrying = true;
       c.state = 'queue';
+      state.events.push({ type: 'pickup', displayId: display.id, customerId: c.id, itemId: c.itemId });
       state.queue.push(c.id);
       break;
     }

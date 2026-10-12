@@ -61,6 +61,7 @@ export interface Customer {
 export type SimEvent =
   | { type: 'sale'; amount: number; x: number; y: number }
   | { type: 'unhappy'; x: number; y: number }
+  | { type: 'pickup'; displayId: number; customerId: number; itemId: string }
   | { type: 'delivered'; displayId: number; itemId: string }
   | { type: 'levelUp'; level: number };
 

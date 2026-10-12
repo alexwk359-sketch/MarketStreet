@@ -2,6 +2,12 @@ import { DECOR, DISPLAYS, ITEMS, type DisplayKind } from '../sim/catalog';
 import { happiness, maxDisplays, xpForLevel } from '../sim/sim';
 import type { Controller, ToastKind } from './controller';
 import { formatTime } from './format';
+import { decorSprite, itemSprite, uiSprite, type UiSprite } from './sprites';
+
+const img = (src: string, cls = 'icon') => `<img class="${cls}" src="${src}" alt="" draggable="false">`;
+const ui = (name: UiSprite, cls?: string) => img(uiSprite(name), cls);
+/** Primer artículo que se vende en cada tipo de expositor, para ilustrarlo. */
+const displayIcon = (kind: DisplayKind) => itemSprite(ITEMS.find((i) => i.display === kind)!.id);
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
@@ -70,12 +76,12 @@ export function mountUi(controller: Controller) {
     const xpFrom = xpForLevel(s.level);
     const xpTo = xpForLevel(s.level + 1);
     hud.innerHTML = `
-      <span class="stat" title="Monedas">🪙 <b>${s.coins}</b></span>
-      <span class="stat" title="Experiencia: ${s.xp} / ${xpTo}">⭐ Nivel <b>${s.level}</b>
+      <span class="stat" title="Monedas">${ui('coin')} <b>${s.coins}</b></span>
+      <span class="stat" title="Experiencia: ${s.xp} / ${xpTo}">${ui('star')} Nivel <b>${s.level}</b>
         <span class="bar"><span style="width:${((s.xp - xpFrom) / (xpTo - xpFrom)) * 100}%"></span></span></span>
       <span class="stat" title="Felicidad de la tienda">${hap >= 60 ? '😊' : hap >= 30 ? '😐' : '😟'} <b>${hap}%</b>
         <span class="bar happy"><span style="width:${hap}%"></span></span></span>
-      <span class="stat muted" title="Ventas / clientes perdidos">🛍️ ${s.stats.sold} · 😠 ${s.stats.lost}</span>`;
+      <span class="stat muted" title="Ventas / clientes perdidos">${ui('bags')} ${s.stats.sold} · ${ui('angry')} ${s.stats.lost}</span>`;
 
     const label = controller.placementLabel();
     placing.hidden = !label;
@@ -105,10 +111,10 @@ function panelHtml(c: Controller): string {
     const max = maxDisplays(s.level);
     const full = s.displays.length >= max;
     const cards = Object.values(DISPLAYS).map((d) => {
-      const items = ITEMS.filter((i) => i.display === d.kind).map((i) => i.icon).join(' ');
+      const items = ITEMS.filter((i) => i.display === d.kind).map((i) => img(itemSprite(i.id), 'mini')).join('');
       const locked = d.unlockLevel > s.level;
       const reason = locked ? `Nivel ${d.unlockLevel}` : full ? 'Sin hueco' : s.coins < d.price ? 'Faltan monedas' : '';
-      return card(d.icon, d.name, `Vende: ${items} · Capacidad ${d.capacity}`, d.price,
+      return card(displayIcon(d.kind), d.name, `<span class="minis">${items}</span>Capacidad ${d.capacity}`, d.price,
         `<button data-action="placeDisplay" data-kind="${d.kind}" ${reason ? 'disabled' : ''}>${reason || 'Colocar'}</button>`, locked);
     });
     return `<h2>Expositores <small>${s.displays.length} / ${max}</small></h2>
@@ -119,7 +125,7 @@ function panelHtml(c: Controller): string {
     const cards = DECOR.map((d) => {
       const locked = d.unlockLevel > s.level;
       const reason = locked ? `Nivel ${d.unlockLevel}` : s.coins < d.price ? 'Faltan monedas' : '';
-      return card(d.icon, d.name, `+${d.happiness}% felicidad`, d.price,
+      return card(d.id === 'rug' ? '' : decorSprite(d.id), d.name, `+${d.happiness}% felicidad`, d.price,
         `<button data-action="placeDecor" data-id="${d.id}" ${reason ? 'disabled' : ''}>${reason || 'Colocar'}</button>`, locked);
     });
     return `<h2>Decoración</h2><p class="muted">La decoración suma hasta un +40% de felicidad.</p>${cards.join('')}`;
@@ -130,10 +136,10 @@ function panelHtml(c: Controller): string {
     if (!d) return '';
     const def = DISPLAYS[d.kind];
     const current = d.itemId && d.stock > 0 ? ITEMS.find((i) => i.id === d.itemId)! : null;
-    let status = current ? `${current.icon} ${current.name}: <b>${d.stock}</b> / ${def.capacity}` : 'Vacío: ¡pide mercancía!';
+    let status = current ? `${img(itemSprite(current.id))} ${current.name}: <b>${d.stock}</b> / ${def.capacity}` : 'Vacío: ¡pide mercancía!';
     if (d.order) {
       const coming = ITEMS.find((i) => i.id === d.order!.itemId)!;
-      status += `<br>🚚 ${coming.name} llegan en <b>${formatTime(d.order.readyAt - s.time)}</b>`;
+      status += `<br>${ui('truck')} ${coming.name} llegan en <b>${formatTime(d.order.readyAt - s.time)}</b>`;
     }
     const cards = ITEMS.filter((i) => i.display === d.kind).map((i) => {
       const locked = i.unlockLevel > s.level;
@@ -143,19 +149,21 @@ function panelHtml(c: Controller): string {
         : d.stock + i.batchSize > def.capacity ? 'Lleno'
         : s.coins < i.batchCost ? 'Faltan monedas' : '';
       const profit = i.batchSize * i.salePrice - i.batchCost;
-      return card(i.icon, i.name,
-        `${i.batchSize} uds · ⏱ ${formatTime(i.deliverySec * 1000)} · vende a ${i.salePrice}🪙 (+${profit}🪙)`, i.batchCost,
+      return card(itemSprite(i.id), i.name,
+        `${i.batchSize} uds · ${formatTime(i.deliverySec * 1000)} · vende a ${i.salePrice} (+${profit} de ganancia)`, i.batchCost,
         `<button data-action="order" data-display="${d.id}" data-id="${i.id}" ${reason ? 'disabled' : ''}>${reason || 'Pedir'}</button>`, locked);
     });
-    return `<h2>${def.icon} ${def.name}</h2><p>${status}</p>${cards.join('')}`;
+    return `<h2>${img(displayIcon(d.kind))} ${def.name}</h2><p>${status}</p>${cards.join('')}`;
   }
   return '';
 }
 
+/** `icon` es la ruta del sprite; vacía para la alfombra, que se dibuja con CSS. */
 function card(icon: string, name: string, detail: string, price: number, button: string, locked: boolean) {
+  const picture = icon ? img(icon, 'card-img') : '<span class="card-img rug"></span>';
   return `<div class="card ${locked ? 'locked' : ''}">
-    <span class="card-icon">${locked ? '🔒' : icon}</span>
+    <span class="card-icon">${picture}${locked ? '<span class="lock">🔒</span>' : ''}</span>
     <span class="card-body"><b>${name}</b><small>${detail}</small></span>
-    <span class="card-buy"><span class="price">${price} 🪙</span>${button}</span>
+    <span class="card-buy"><span class="price">${price} ${ui('coin')}</span>${button}</span>
   </div>`;
 }
