@@ -197,7 +197,7 @@ describe('clientes', () => {
   it('un cliente entra desde la acera, compra, paga y se va', () => {
     const s = quietState();
     Object.assign(s.displays[0], { itemId: 'tshirt', stock: 10 });
-    const c = spawnCustomer(s, () => 0, false);
+    const c = spawnCustomer(s, () => 0, 'regular');
     expect(c.state).toBe('toDisplay');
     expect(c.y).toBe(storeSize(s).h);
     expect(s.displays[0].reserved).toBe(1);
@@ -234,7 +234,7 @@ describe('clientes', () => {
   it('si no encuentra lo que busca se va enfadado', () => {
     const s = quietState();
     const mood = s.mood;
-    spawnCustomer(s, () => 0, false);
+    spawnCustomer(s, () => 0, 'regular');
     run(s, 40);
     expect(s.stats.lost).toBe(1);
     expect(s.mood).toBeLessThan(mood);
@@ -246,7 +246,7 @@ describe('clientes', () => {
     s.level = 3;
     s.trend = { kind: 'shelf', until: Infinity }; // sin tendencia en la ropa
     Object.assign(s.displays[0], { itemId: 'tshirt', stock: 10 });
-    spawnCustomer(s, () => 0, true);
+    spawnCustomer(s, () => 0, 'vip');
     run(s, 40);
     expect(s.stats.vipServed).toBe(1);
     expect(s.coins).toBe(150 + itemById('tshirt').salePrice * 3);
@@ -267,7 +267,7 @@ describe('clientes', () => {
     Object.assign(s.displays[0], { itemId: 'tshirt', stock: 10 });
     tick(s, 100, seededRng(1));
     expect(s.trend?.kind).toBe('rack');
-    spawnCustomer(s, () => 0, false);
+    spawnCustomer(s, () => 0, 'regular');
     run(s, 40);
     expect(s.stats.trendSold).toBe(1);
     expect(s.coins).toBe(150 + Math.round(itemById('tshirt').salePrice * 1.25));

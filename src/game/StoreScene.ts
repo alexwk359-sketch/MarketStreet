@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { ARCHETYPES } from '../sim/archetypes';
 import { DECOR, FLOORS, FURNITURE_DECOR, ITEMS, WALLS, type DisplayKind } from '../sim/catalog';
 import { placementError, type FurnitureKind, type FurnitureRef } from '../sim/path';
 import { available, capacity } from '../sim/sim';
@@ -22,18 +23,20 @@ import {
   CASHIER_VARIANTS,
   CHARACTER_FRAME,
   CUSTOMER_COLUMNS,
-  CUSTOMER_VARIANTS,
+  CHARACTER_SHEETS,
   FURNITURE_SPRITES,
   STREET_SPRITES,
   UI_SPRITES,
   decorSprite,
   cashierSheet,
-  customerSheet,
+  characterKey,
+  characterSheet,
   furnitureSprite,
   itemSprite,
   streetSprite,
   uiSprite,
 } from './sprites';
+import { Atmosphere } from './atmosphere';
 import { Street } from './street';
 
 const WALL_HEIGHT = 70;
@@ -116,7 +119,7 @@ const FURNITURE_ORIGIN_Y = 0.75;
 
 const DECOR_SIZE: Record<string, number> = {
   plant: 36, cactus: 32, sunflower: 38, tulip: 34, picture: 30, bouquet: 34, dog: 36,
-  sofa: 58, palm: 66, tree: 60, fountain: 62, moai: 52, statue: 70,
+  sofa: 58, palm: 66, tree: 60, fountain: 62, moai: 52, statue: 70, balloons: 46, pumpkin: 32, snowman: 44,
 };
 
 interface DisplayView {
@@ -153,7 +156,10 @@ interface CustomerView {
   crown: Phaser.GameObjects.Image;
   bubble: Phaser.GameObjects.Graphics;
   bubbleIcon: Phaser.GameObjects.Image;
-  variant: number;
+  /** Clave de la hoja del personaje (char:<tipo>:<variante>). */
+  key: string;
+  /** Distintivo sobre la cabeza: lista de la compra, libreta del crítico o sirena del ladrón. */
+  badge: Phaser.GameObjects.Image;
   facing: Facing;
   flip: boolean;
   last: Point;
@@ -173,6 +179,7 @@ export class StoreScene extends Phaser.Scene {
   private ghost!: Phaser.GameObjects.Graphics;
   private ghostImage!: Phaser.GameObjects.Image;
   private street!: Street;
+  private atmosphere!: Atmosphere;
   private fx!: Effects;
   private hover: Point | null = null;
   private displays = new Map<number, DisplayView>();
@@ -199,7 +206,9 @@ export class StoreScene extends Phaser.Scene {
     for (const d of DECOR) this.load.image(`decor:${d.id}`, decorSprite(d.id));
     for (const name of UI_SPRITES) this.load.image(`ui:${name}`, uiSprite(name));
     for (const name of STREET_SPRITES) this.load.image(`street:${name}`, streetSprite(name));
-    for (let i = 0; i < CUSTOMER_VARIANTS; i++) this.load.spritesheet(`cust:${i}`, customerSheet(i), CHARACTER_FRAME);
+    for (const [sheet, count] of Object.entries(CHARACTER_SHEETS)) {
+      for (let i = 0; i < count; i++) this.load.spritesheet(characterKey(sheet, i), characterSheet(sheet, i), CHARACTER_FRAME);
+    }
     for (let i = 0; i < CASHIER_VARIANTS; i++) this.load.spritesheet(`cash:${i}`, cashierSheet(i), CHARACTER_FRAME);
     for (const name of FURNITURE_SPRITES) this.load.image(`furn:${name}`, furnitureSprite(name));
   }
@@ -210,6 +219,7 @@ export class StoreScene extends Phaser.Scene {
     this.ghost = this.add.graphics().setDepth(900);
     this.ghostImage = this.add.image(0, 0, 'ui:package').setDepth(901).setVisible(false);
     this.street = new Street(this);
+    this.atmosphere = new Atmosphere(this);
     this.fx = new Effects(this);
     this.input.addPointer(1);
     this.scale.on('resize', () => this.fitCamera());
@@ -226,8 +236,8 @@ export class StoreScene extends Phaser.Scene {
   private createAnimations() {
     const frames = (key: string, list: number[]) => list.map((frame) => ({ key, frame }));
     const walk = [0, 1, 2, 3, 4, 5, 6, 7];
-    for (let i = 0; i < CUSTOMER_VARIANTS; i++) {
-      const key = `cust:${i}`;
+    const keys = Object.entries(CHARACTER_SHEETS).flatMap(([sheet, count]) => Array.from({ length: count }, (_, i) => characterKey(sheet, i)));
+    for (const key of keys) {
       this.anims.create({ key: `${key}:walk-front`, frames: frames(key, walk), frameRate: 11, repeat: -1 });
       this.anims.create({ key: `${key}:walk-back`, frames: frames(key, walk.map((f) => f + CUSTOMER_COLUMNS)), frameRate: 11, repeat: -1 });
     }
@@ -246,10 +256,12 @@ export class StoreScene extends Phaser.Scene {
     if (w !== this.size.w || h !== this.size.h) {
       this.size = { w, h };
       this.street.layout(w, h);
+      this.atmosphere.setLights(this.street.lampHeads, { w, h });
       this.userZoom = 1;
       this.fitCamera();
     }
     this.street.update(Math.min(delta, 100) / 1000);
+    this.atmosphere.update(this.controller.state);
     this.drawFloor();
     this.syncDecor(time);
     this.syncRegisters(time);
@@ -356,7 +368,22 @@ export class StoreScene extends Phaser.Scene {
       if (tile) c.tapTile(tile.x, tile.y);
       return;
     }
+    const thief = this.thiefAt(p.worldX, p.worldY);
+    if (thief !== null) {
+      c.catchThief(thief);
+      return;
+    }
     c.selectFurniture(this.furnitureAt(p.worldX, p.worldY));
+  }
+
+  /** Ladrón bajo el puntero (con margen generoso: hay que atraparlo mientras corre). */
+  private thiefAt(sx: number, sy: number): number | null {
+    for (const c of this.controller.state.customers) {
+      if (c.kind !== 'thief' || c.state === 'leaving') continue;
+      const p = tileCenter(c.x, c.y);
+      if (Math.abs(sx - p.x) < 22 && sy > p.y - HEAD_TOP - 14 && sy < p.y + 10) return c.id;
+    }
+    return null;
   }
 
   private isSelected(kind: FurnitureKind, id: number) {
@@ -703,15 +730,19 @@ export class StoreScene extends Phaser.Scene {
   }
 
   private createCustomer(c: Customer): CustomerView {
-    const variant = c.look % CUSTOMER_VARIANTS;
+    const sheet = ARCHETYPES[c.kind].sheet;
+    const key = characterKey(sheet, c.look % CHARACTER_SHEETS[sheet]);
     const shadow = this.add.graphics();
-    const body = this.add.sprite(0, 0, `cust:${variant}`, 8).setOrigin(0.5, CHARACTER_ORIGIN_Y).setScale(CHARACTER_SCALE);
+    const body = this.add.sprite(0, 0, key, 8).setOrigin(0.5, CHARACTER_ORIGIN_Y).setScale(CHARACTER_SCALE);
+    // Los abuelos caminan más despacio y los niños más deprisa: la animación sigue su ritmo.
+    body.anims.timeScale = c.speed / 2.2;
+    const badge = this.add.image(0, 0, 'ui:notepad').setDisplaySize(16, 16).setVisible(false);
     const bag = this.add.image(0, 0, 'ui:bags').setDisplaySize(16, 16).setOrigin(0.5, 1).setVisible(false);
     const crown = this.add.image(0, 0, 'ui:crown').setDisplaySize(18, 18).setVisible(c.vip);
     const bubble = this.add.graphics();
     const bubbleIcon = this.add.image(0, 0, 'ui:question').setDisplaySize(16, 16).setVisible(false);
-    const container = this.add.container(0, 0, [shadow, body, bag, crown, bubble, bubbleIcon]);
-    const view: CustomerView = { container, shadow, body, bag, crown, bubble, bubbleIcon, variant, facing: 'front', flip: false, last: { x: c.x, y: c.y } };
+    const container = this.add.container(0, 0, [shadow, body, bag, crown, badge, bubble, bubbleIcon]);
+    const view: CustomerView = { container, shadow, body, bag, crown, badge, bubble, bubbleIcon, key, facing: 'front', flip: false, last: { x: c.x, y: c.y } };
     this.customers.set(c.id, view);
     return view;
   }
@@ -744,7 +775,8 @@ export class StoreScene extends Phaser.Scene {
 
     const row = v.facing === 'front' ? 0 : CUSTOMER_COLUMNS;
     if (walking) {
-      v.body.play(`cust:${v.variant}:walk-${v.facing}`, true);
+      v.body.anims.timeScale = c.speed / 2.2;
+      v.body.play(`${v.key}:walk-${v.facing}`, true);
     } else {
       v.body.stop();
       v.body.setFrame(row + (c.state === 'browsing' ? 9 : 8));
@@ -755,6 +787,13 @@ export class StoreScene extends Phaser.Scene {
     if (c.vip) v.shadow.fillStyle(0xffd60a, 0.35).fillEllipse(p.x, p.y, 34, 13);
     v.shadow.fillStyle(0x000000, 0.2).fillEllipse(p.x, p.y, 20, 7);
     v.crown.setPosition(p.x, p.y - HEAD_TOP - 6);
+    // Distintivos: lista de la compra, libreta del crítico y sirena sobre el ladrón que huye.
+    const badge = c.kind === 'list' ? 'ui:notepad' : c.kind === 'critic' ? 'ui:memo' : c.kind === 'thief' && c.state === 'fleeing' ? 'ui:siren' : null;
+    v.badge.setVisible(badge !== null);
+    if (badge) {
+      const pulse = c.kind === 'thief' ? 1 + Math.abs(Math.sin(time / 120)) * 0.35 : 1;
+      v.badge.setTexture(badge).setDisplaySize(16 * pulse, 16 * pulse).setPosition(p.x - 14, p.y - HEAD_TOP - 4);
+    }
 
     // Entran y salen difuminándose por la acera.
     const { w } = this.size;
@@ -824,6 +863,17 @@ export class StoreScene extends Phaser.Scene {
       case 'levelUp':
         this.fx.confetti();
         return;
+      case 'thiefCaught': {
+        const p = tileCenter(e.x, e.y);
+        this.fx.popIcon(p, 'ui:siren', 30);
+        this.fx.floatText({ x: p.x, y: p.y - 60 }, `¡Atrapado! +${e.reward}`, '#ffd166', 15);
+        return;
+      }
+      case 'criticHappy': {
+        const p = tileCenter(e.x, e.y);
+        for (let i = 0; i < 5; i++) this.fx.popIcon({ x: p.x + (i - 2) * 16, y: p.y - 10 }, 'ui:star', 22, i * 90);
+        return;
+      }
     }
   }
 }

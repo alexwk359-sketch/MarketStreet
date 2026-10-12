@@ -1,3 +1,4 @@
+import type { ArchetypeDef } from '../sim/archetypes';
 import { FURNITURE_DECOR } from '../sim/catalog';
 
 // Rutas y claves de los sprites de public/sprites/. Los productos, iconos y vehículos son
@@ -16,6 +17,8 @@ export const UI_SPRITES = [
   'coin', 'gem', 'truck', 'moneybag', 'bags', 'package', 'star', 'sparkles', 'angry', 'love', 'question', 'build',
   'cart', 'crown', 'clipboard', 'fire', 'party', 'gift', 'sound', 'mute', 'trash', 'rocket', 'megaphone', 'check',
   'trophy', 'chart', 'store', 'bell', 'clock', 'gear', 'bolt', 'heart', 'brush', 'palette',
+  'sun', 'cloudsun', 'rain', 'snow', 'hot', 'moon', 'sunrise', 'sunset', 'memo', 'notepad', 'siren', 'hourglass',
+  'hundred', 'flash',
 ] as const;
 export type UiSprite = (typeof UI_SPRITES)[number];
 
@@ -24,12 +27,23 @@ export type UiSprite = (typeof UI_SPRITES)[number];
  * Clientes: fila 0 de frente, fila 1 de espaldas; columnas 0-7 caminar, 8 quieto, 9 alcanzar.
  * Cajeros: una fila; 0-1 reposo, 2-4 escanear, 5-6 saludar.
  */
-export const CUSTOMER_VARIANTS = 24;
 export const CASHIER_VARIANTS = 6;
 export const CHARACTER_FRAME = { frameWidth: 80, frameHeight: 120 };
 export const CUSTOMER_COLUMNS = 10;
-export const customerSheet = (i: number) => `${SPRITE_BASE}people/customer-${i}.png`;
 export const cashierSheet = (i: number) => `${SPRITE_BASE}people/cashier-${i}.png`;
+
+/** Hojas de clientes por tipo (coinciden con CHARACTER_SETS de characters.js). */
+export const CHARACTER_SHEETS: Record<ArchetypeDef['sheet'], number> = {
+  customer: 24,
+  kid: 6,
+  senior: 4,
+  tourist: 4,
+  critic: 2,
+  thief: 2,
+};
+export const characterSheet = (sheet: string, i: number) => `${SPRITE_BASE}people/${sheet}-${i}.png`;
+/** Clave de textura (y prefijo de animaciones) de una variante. */
+export const characterKey = (sheet: string, i: number) => `char:${sheet}:${i}`;
 
 export const STREET_SPRITES = ['tree', 'pine', 'car', 'taxi', 'bus', 'suv', 'moto'] as const;
 export const STREET_VEHICLES = ['car', 'taxi', 'bus', 'suv', 'moto'];

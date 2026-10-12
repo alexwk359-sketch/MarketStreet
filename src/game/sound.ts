@@ -91,6 +91,22 @@ class Sfx {
     [880, 1109, 1319].forEach((f, i) => this.tone(f, i * 0.06, 0.2, 'sine', 0.1));
   }
 
+  siren() {
+    for (let i = 0; i < 3; i++) {
+      this.tone(880, i * 0.3, 0.15, 'square', 0.04);
+      this.tone(660, i * 0.3 + 0.15, 0.15, 'square', 0.04);
+    }
+  }
+
+  caught() {
+    [523, 784, 1047, 1568].forEach((f, i) => this.tone(f, i * 0.05, 0.15, 'square', 0.05));
+  }
+
+  order() {
+    this.tone(1175, 0, 0.12, 'sine', 0.1);
+    this.tone(1568, 0.12, 0.25, 'sine', 0.1);
+  }
+
   click() {
     this.tone(700, 0, 0.04, 'sine', 0.05);
   }

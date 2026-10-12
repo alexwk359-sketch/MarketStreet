@@ -142,6 +142,9 @@ SPRITES = {
     "decor/palm": "Palm tree",
     "decor/moai": "Moai",
     "decor/statue": "Statue of liberty",
+    "decor/balloons": "Balloon",
+    "decor/pumpkin": "Jack-o-lantern",
+    "decor/snowman": "Snowman",
     # Exterior
     "street/tree": "Deciduous tree",
     "street/pine": "Evergreen tree",
@@ -185,6 +188,20 @@ SPRITES = {
     "ui/heart": "Sparkling heart",
     "ui/brush": "Paintbrush",
     "ui/palette": "Artist palette",
+    "ui/sun": "Sun",
+    "ui/cloudsun": "Sun behind cloud",
+    "ui/rain": "Cloud with rain",
+    "ui/snow": "Cloud with snow",
+    "ui/hot": "Hot face",
+    "ui/moon": "Crescent moon",
+    "ui/sunrise": "Sunrise",
+    "ui/sunset": "Sunset",
+    "ui/memo": "Memo",
+    "ui/notepad": "Spiral notepad",
+    "ui/siren": "Police car light",
+    "ui/hourglass": "Hourglass not done",
+    "ui/hundred": "Hundred points",
+    "ui/flash": "Camera with flash",
 }
 
 # Clientes y cajeros ya no vienen de aquí: se modelan en 3D (scripts/furniture/characters.js).

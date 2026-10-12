@@ -51,6 +51,89 @@ export function customerSpec(seed) {
   };
 }
 
+/** Niños: más bajos, cabeza más grande y colores vivos. */
+export function kidSpec(seed) {
+  const r = rng(seed * 6007 + 3);
+  return {
+    ...customerSpec(seed + 500),
+    hairStyle: pick(r, ['short', 'ponytail', 'bun', 'spiky', 'bob']),
+    top: pick(r, ['tshirt', 'tshirt', 'hoodie']),
+    topColor: pick(r, [0xff006e, 0x3a86ff, 0xffbe0b, 0x06d6a0, 0xfb5607, 0x8338ec]),
+    bottom: pick(r, ['shorts', 'pants', 'skirt']),
+    accessory: pick(r, ['cap', 'backpack', 'none', 'backpack']),
+    height: 0.7,
+    headScale: 1.35,
+  };
+}
+
+/** Abuelos: pelo cano, ropa sobria, algo encorvados y a veces con bastón. */
+export function seniorSpec(seed) {
+  const r = rng(seed * 3001 + 11);
+  return {
+    ...customerSpec(seed + 900),
+    hair: pick(r, [0xd9d9d9, 0xbfbfbf, 0xf1f1f1, 0xa8a8a8]),
+    hairStyle: pick(r, ['short', 'bun', 'bald', 'bob']),
+    top: 'jacket',
+    topColor: pick(r, [0xc9ada7, 0x6b705c, 0x9d4b4b, 0x355070, 0xb5838d]),
+    trim: 0xf8f9fa,
+    bottom: pick(r, ['pants', 'skirt']),
+    bottomColor: pick(r, [0x6c584c, 0x495057, 0x3d405b]),
+    accessory: r() < 0.7 ? 'glasses' : 'none',
+    hunch: 0.14,
+    cane: seed % 2 === 0,
+    height: 0.95,
+  };
+}
+
+/** Turistas: camisa de colores, pantalón corto, sombrero o gafas de sol y cámara. */
+export function touristSpec(seed) {
+  const r = rng(seed * 4999 + 17);
+  return {
+    ...customerSpec(seed + 1300),
+    top: 'tshirt',
+    topColor: pick(r, [0x00b4d8, 0xff8fab, 0x80ed99, 0xffd166]),
+    trim: pick(r, [0xffb703, 0xffffff, 0xef476f]),
+    bottom: 'shorts',
+    bottomColor: pick(r, [0xe9c46a, 0x2a9d8f, 0xf4a261]),
+    accessory: 'none',
+    extras: seed % 2 === 0 ? ['sunhat', 'camera'] : ['sunglasses', 'camera', 'backpack'],
+  };
+}
+
+/** Crítico de tiendas: boina, bufanda, gafas de sol y ropa negra. */
+export function criticSpec(seed) {
+  return {
+    ...customerSpec(seed + 1700),
+    top: 'jacket',
+    topColor: 0x22223b,
+    trim: 0x4a4e69,
+    bottom: 'pants',
+    bottomColor: 0x4a4e69,
+    shoes: 0x111111,
+    accessory: 'none',
+    hairStyle: seed % 2 ? 'bob' : 'short',
+    extras: ['beret', 'scarf', 'sunglasses'],
+    accentColor: seed % 2 ? 0xd62828 : 0x9d0208,
+  };
+}
+
+/** Ladrones: camiseta a rayas, gorro, antifaz y un saco para el botín. */
+export function thiefSpec(seed) {
+  return {
+    ...customerSpec(seed + 2100),
+    top: 'tshirt',
+    topColor: 0x1d1d3a,
+    trim: 0x1d1d3a,
+    bottom: 'pants',
+    bottomColor: 0x111111,
+    shoes: 0x111111,
+    accessory: 'beanie',
+    accessoryColor: 0x111111,
+    hairStyle: 'short',
+    extras: ['stripes', 'mask', 'sack'],
+  };
+}
+
 /** Cajeros: uniforme de la tienda (polo rojo, delantal verde, gorra) con distinto pelo y piel. */
 export function cashierSpec(seed) {
   const r = rng(seed * 104729 + 7);
@@ -162,6 +245,67 @@ function buildAccessory(head, torso, spec, m) {
   }
 }
 
+/** Complementos que se pueden combinar (turistas, críticos, ladrones...). */
+function buildExtras(head, torso, spec) {
+  for (const extra of spec.extras ?? []) {
+    switch (extra) {
+      case 'sunhat': {
+        const straw = mat(0xf2cc8f, { roughness: 0.9 });
+        add(head, new THREE.CylinderGeometry(0.32, 0.32, 0.015, 32), straw, [0, 0.12, 0]);
+        add(head, new THREE.CylinderGeometry(0.15, 0.175, 0.11, 24), straw, [0, 0.18, 0]);
+        add(head, new THREE.CylinderGeometry(0.177, 0.177, 0.03, 24), mat(0xe63946), [0, 0.14, 0]);
+        break;
+      }
+      case 'camera':
+        add(torso, rbox(0.12, 0.08, 0.05, 0.015), mat(0x212529, { roughness: 0.3 }), [0, 0.22, 0.12]);
+        add(torso, new THREE.CylinderGeometry(0.025, 0.025, 0.04, 14), mat(0x495057, { metalness: 0.6, roughness: 0.3 }), [0, 0.22, 0.155]).rotation.x = Math.PI / 2;
+        break;
+      case 'beret': {
+        const beret = add(head, new THREE.SphereGeometry(0.19, 24, 14), mat(spec.accentColor ?? 0xd62828, { roughness: 0.9 }), [0.02, 0.13, -0.01]);
+        beret.scale.set(1.05, 0.35, 1.05);
+        beret.rotation.z = -0.25;
+        break;
+      }
+      case 'scarf': {
+        const wool = mat(spec.accentColor ?? 0xd62828, { roughness: 0.95 });
+        const ring = add(torso, new THREE.TorusGeometry(0.09, 0.04, 10, 20), wool, [0, 0.36, 0]);
+        ring.rotation.x = Math.PI / 2;
+        add(torso, rbox(0.07, 0.18, 0.03, 0.015), wool, [0.06, 0.24, 0.1]);
+        break;
+      }
+      case 'sunglasses': {
+        const dark = mat(0x111111, { roughness: 0.15, metalness: 0.4 });
+        for (const x of [-0.065, 0.065]) {
+          const lens = add(head, new THREE.CylinderGeometry(0.042, 0.042, 0.012, 20), dark, [x, 0.0, 0.168]);
+          lens.rotation.x = Math.PI / 2;
+        }
+        add(head, rbox(0.06, 0.012, 0.012, 0.004), dark, [0, 0.01, 0.17]);
+        break;
+      }
+      case 'stripes':
+        for (const y of [0.09, 0.17, 0.25]) add(torso, rbox(0.305, 0.03, 0.195, 0.012), mat(0xf8f9fa), [0, y, 0]);
+        break;
+      case 'mask': {
+        const band = add(head, new THREE.CylinderGeometry(0.178, 0.178, 0.055, 28, 1, true), mat(0x111111), [0, 0.0, 0]);
+        band.material.side = THREE.DoubleSide;
+        for (const x of [-0.06, 0.06]) add(head, new THREE.SphereGeometry(0.02, 10, 8), mat(0xffffff), [x, 0.0, 0.176]).scale.set(1.2, 0.8, 0.4);
+        break;
+      }
+      case 'sack': {
+        const sack = add(torso, new THREE.SphereGeometry(0.13, 16, 12), mat(0xb08968, { roughness: 1 }), [0, 0.2, -0.17]);
+        sack.scale.set(1, 1.15, 0.85);
+        add(torso, new THREE.SphereGeometry(0.035, 10, 8), mat(0x7f5539), [0, 0.35, -0.17]);
+        break;
+      }
+      case 'backpack':
+        add(torso, rbox(0.24, 0.28, 0.1, 0.04), mat(spec.trim), [0, 0.02, -0.15]);
+        break;
+      default:
+        break;
+    }
+  }
+}
+
 /**
  * Monta el personaje con una pose:
  * - legL/legR: giro de cada pierna hacia delante (radianes)
@@ -201,7 +345,7 @@ export function makeCharacter(spec, pose = {}) {
   // Tronco, con la ropa.
   const torso = new THREE.Group();
   torso.position.y = hipY;
-  torso.rotation.x = p.lean;
+  torso.rotation.x = p.lean + (spec.hunch ?? 0);
   body.add(torso);
   if (spec.bottom === 'pants' || spec.bottom === 'shorts') add(torso, rbox(0.28, 0.08, 0.18, 0.04), m.bottom, [0, 0.02, 0]);
   if (spec.bottom === 'skirt') add(torso, new THREE.ConeGeometry(0.19, 0.2, 20), m.bottom, [0, -0.04, 0]).rotation.x = Math.PI;
@@ -237,6 +381,11 @@ export function makeCharacter(spec, pose = {}) {
     arm.add(fore);
     add(fore, capsule(0.042, 0.1), m.skin, [0, -0.05, 0]);
     add(fore, new THREE.SphereGeometry(0.046, 14, 10), m.skin, [0, -0.13, 0]);
+    // Bastón en la mano derecha.
+    if (spec.cane && side === -1) {
+      add(fore, new THREE.CylinderGeometry(0.012, 0.012, 0.3, 8), mat(0x7f5539), [0, -0.28, 0.04]);
+      add(fore, new THREE.TorusGeometry(0.03, 0.01, 6, 12, Math.PI), mat(0x7f5539), [0, -0.13, 0.07]).rotation.y = Math.PI / 2;
+    }
   }
 
   // Cabeza con cara, pelo y accesorios.
@@ -245,7 +394,7 @@ export function makeCharacter(spec, pose = {}) {
   head.position.y = 0.56;
   head.rotation.x = p.headTilt;
   // Cabeza grande, al estilo chibi, para que la cara se lea a tamaño de juego.
-  head.scale.setScalar(1.12);
+  head.scale.setScalar(spec.headScale ?? 1.12);
   torso.add(head);
   add(head, new THREE.SphereGeometry(0.172, 28, 20), m.skin).scale.set(1, 0.97, 0.95);
   for (const x of [-0.06, 0.06]) {
@@ -255,6 +404,7 @@ export function makeCharacter(spec, pose = {}) {
   add(head, rbox(0.05, 0.012, 0.01, 0.005), mat(0x9d4b4b), [0, -0.065, 0.158]);
   buildHair(head, spec, m);
   buildAccessory(head, torso, spec, m);
+  buildExtras(head, torso, spec);
   return root;
 }
 
@@ -288,6 +438,16 @@ export const CASHIER_POSES = [
 
 export const CUSTOMER_VARIANTS = 24;
 export const CASHIER_VARIANTS = 6;
+
+/** Juegos de personajes de clientes: nombre de la hoja, cuántas variantes y su aspecto. */
+export const CHARACTER_SETS = [
+  { name: 'customer', count: CUSTOMER_VARIANTS, spec: customerSpec },
+  { name: 'kid', count: 6, spec: kidSpec },
+  { name: 'senior', count: 4, spec: seniorSpec },
+  { name: 'tourist', count: 4, spec: touristSpec },
+  { name: 'critic', count: 2, spec: criticSpec },
+  { name: 'thief', count: 2, spec: thiefSpec },
+];
 
 /** Direcciones de las hojas: de frente (hacia +x, abajo a la derecha) y de espaldas (hacia -z, arriba a la derecha). */
 export const DIRECTIONS = [Math.PI / 2, Math.PI];

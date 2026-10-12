@@ -3,6 +3,7 @@ import { Controller } from './game/controller';
 import { StoreScene } from './game/StoreScene';
 import { mountUi } from './game/ui';
 import { loadGame } from './sim/save';
+import * as sim from './sim/sim';
 import './style.css';
 
 const { state, offline } = loadGame(Date.now(), Math.random);
@@ -26,4 +27,4 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // Acceso desde la consola del navegador para depurar y para los tests de humo.
-Object.assign(window, { marketStreet: { controller, game } });
+Object.assign(window, { marketStreet: { controller, game, sim } });

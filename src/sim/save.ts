@@ -57,7 +57,16 @@ export function deserialize(json: string): GameState {
         : null,
   }));
   const decor = (data.decor as PlacedDecor[]).filter((d) => DECOR.some((x) => x.id === d.decorId));
-  return { ...createInitialState(data.time), ...data, displays, decor, customers: [], events: [] };
+  // Los campos nuevos que no estén en partidas antiguas toman su valor inicial.
+  return {
+    ...createInitialState(data.time),
+    ...data,
+    stats: { ...emptyStats(), ...data.stats },
+    displays,
+    decor,
+    customers: [],
+    events: [],
+  };
 }
 
 export interface LoadResult {

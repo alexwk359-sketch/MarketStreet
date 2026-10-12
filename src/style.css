@@ -69,6 +69,38 @@ img.icon { width: 20px; height: 20px; vertical-align: -4px; }
 .chip img.icon { width: 16px; height: 16px; }
 #hud .sound { border: 0; background: var(--line); border-radius: 50%; width: 32px; height: 32px; padding: 0; cursor: pointer; }
 
+.chip.world { background: #e0f2fe; color: #1d4e89; }
+.chip.world img.icon + img.icon { margin-left: -4px; }
+.chip.viral { background: #fde2e4; color: #9d0208; }
+
+/* ---------- Encargo especial ---------- */
+
+#order {
+  position: fixed;
+  top: 76px;
+  left: 12px;
+  width: 280px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border-radius: 16px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.22);
+  font-size: 13px;
+  animation: drop 0.3s ease-out;
+}
+.order-head { display: flex; align-items: center; gap: 6px; }
+.order-head small { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.order-head .x { border: 0; background: var(--line); border-radius: 50%; width: 22px; height: 22px; cursor: pointer; font-size: 11px; }
+.order-body { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.order-body > span { display: flex; flex-direction: column; gap: 3px; }
+img.order-item { width: 38px; height: 38px; }
+.order-foot { display: flex; align-items: center; gap: 8px; }
+.order-foot .reward { flex: 1; }
+.order-foot button {
+  padding: 6px 12px; border: 0; border-radius: 10px; background: var(--accent); color: #fff;
+  font-weight: 700; cursor: pointer; box-shadow: 0 2px 0 var(--accent-dark);
+}
+.order-foot button:disabled { background: var(--line); color: var(--muted); box-shadow: none; cursor: default; }
+
 /* ---------- Barra inferior ---------- */
 
 #toolbar {
@@ -319,4 +351,6 @@ img.unlock { width: 44px; height: 44px; }
   #toolbar button span { font-size: 11px; }
   #placing { bottom: 90px; white-space: normal; width: calc(100% - 24px); justify-content: space-between; }
   #toasts { top: auto; bottom: 150px; }
+  #order { top: auto; bottom: 84px; left: 8px; right: 8px; width: auto; }
+  .chip.world span { display: none; }
 }

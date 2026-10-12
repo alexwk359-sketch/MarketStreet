@@ -21,7 +21,10 @@ import {
   reachableFromDoor,
   type FurnitureRef,
 } from './path';
+import { ARCHETYPES, THIEF_FLEE_SPEED, pickArchetype, type CustomerKind } from './archetypes';
+import { updateOrders } from './orders';
 import type { Rng } from './rng';
+import { updateWeather, weatherDemand, worldCustomers } from './world';
 import {
   doorTile,
   registerFront,
@@ -36,18 +39,17 @@ import {
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
-const WALK_SPEED = 2.2; // casillas por segundo
 const BROWSE_SEC = 1.2;
 const COMPLAIN_SEC = 1.5;
 const PATIENCE_SEC = 35;
-const VIP_PATIENCE_SEC = 22;
 const MAX_CUSTOMERS = 14;
 const MAX_DECOR_BONUS = 40;
 const LOST_MOOD_PENALTY = 2;
 const QUEUE_MOOD_PENALTY = 3;
 const SALE_MOOD_BONUS = 1;
-const VIP_CHANCE = 0.06;
-const VIP_PRICE_MULTIPLIER = 3;
+const CRITIC_MOOD = 15;
+const VIRAL_MS = 2 * 60_000;
+const VIRAL_MULTIPLIER = 1.5;
 const TREND_BONUS = 0.25;
 const TREND_MS = 4 * 60_000;
 const TIP_HAPPINESS = 70;
@@ -88,9 +90,12 @@ export const decorHappiness = (state: GameState) =>
 export const happiness = (state: GameState) =>
   clamp(state.mood + decorHappiness(state) + 5 * upgradeLevel(state, 'music'), 0, 100);
 
-/** Segundos entre clientes: más felicidad y publicidad, más clientela. */
+/** Segundos entre clientes: más felicidad y publicidad, más clientela; el tiempo y la hora también cuentan. */
 export const spawnInterval = (state: GameState) =>
-  (9 - 5 * (happiness(state) / 100)) / (1 + 0.2 * upgradeLevel(state, 'ads'));
+  (9 - 5 * (happiness(state) / 100)) /
+  (1 + 0.2 * upgradeLevel(state, 'ads')) /
+  worldCustomers(state) /
+  (state.time < state.boostUntil ? VIRAL_MULTIPLIER : 1);
 
 export const isTrending = (state: GameState, item: ItemDef) => state.trend?.kind === item.display;
 
@@ -297,6 +302,8 @@ export function tick(state: GameState, dtMs: number, rng: Rng): void {
   const dt = dtMs / 1000;
   updateDeliveries(state);
   updateTrend(state, rng);
+  updateWeather(state, rng);
+  updateOrders(state, rng);
   updateSpawning(state, dt, rng);
   const queues = buildQueues(state);
   for (const c of [...state.customers]) updateCustomer(state, c, dt, queues);
@@ -344,32 +351,80 @@ function updateSpawning(state: GameState, dt: number, rng: Rng) {
   spawnCustomer(state, rng);
 }
 
-/**
- * Qué busca un cliente. Casi siempre algo que hay en los estantes; a veces algo que la
- * tienda suele vender pero se ha agotado (castiga dejar estantes vacíos), la tendencia
- * del momento o, rara vez, cualquier cosa de las categorías que vendes.
- */
-function chooseDesire(state: GameState, vip: boolean, rng: Rng): string {
-  const stocked = [...new Set(state.displays.filter((d) => available(d) > 0).map((d) => d.itemId!))];
-  const carried = [...new Set(state.displays.filter((d) => d.itemId).map((d) => d.itemId!))];
-  const ownedKinds = new Set(state.displays.map((d) => d.kind));
-  const sellable = unlockedItems(state.level).filter((i) => ownedKinds.has(i.display)).map((i) => i.id);
-  const any = sellable.length > 0 ? sellable : unlockedItems(state.level).map((i) => i.id);
-  const trending = state.trend ? unlockedItems(state.level).filter((i) => i.display === state.trend!.kind).map((i) => i.id) : [];
-  const trendingStocked = stocked.filter((id) => trending.includes(id));
-
-  if (vip) return pick(stocked.length > 0 && rng() < 0.6 ? stocked : any, rng);
-  if (trending.length > 0 && rng() < 0.3) return pick(trendingStocked.length > 0 && rng() < 0.85 ? trendingStocked : trending, rng);
-  const r = rng();
-  if (stocked.length > 0 && r < 0.88) return pick(stocked, rng);
-  if (carried.length > 0 && r < 0.97) return pick(carried, rng);
-  return pick(any, rng);
+/** Elige al azar con pesos. */
+function pickWeighted<T>(list: T[], weight: (x: T) => number, rng: Rng): T {
+  let r = rng() * list.reduce((sum, x) => sum + weight(x), 0);
+  for (const x of list) {
+    r -= weight(x);
+    if (r <= 0) return x;
+  }
+  return list[list.length - 1];
 }
 
-export function spawnCustomer(state: GameState, rng: Rng, vip = state.level >= 3 && rng() < VIP_CHANCE): Customer {
+/**
+ * Qué busca un cliente. Casi siempre algo que hay en los estantes (pesando más lo que pide
+ * el tiempo y lo que prefiere ese tipo de cliente); a veces algo que la tienda suele vender
+ * pero se ha agotado (castiga dejar estantes vacíos), la tendencia del momento o, rara vez,
+ * cualquier cosa de las categorías que vendes.
+ */
+function chooseDesire(state: GameState, kind: CustomerKind, rng: Rng, exclude: string[] = []): string | null {
+  const fresh = (ids: string[]) => ids.filter((id) => !exclude.includes(id));
+  const stocked = fresh([...new Set(state.displays.filter((d) => available(d) > 0).map((d) => d.itemId!))]);
+  const carried = fresh([...new Set(state.displays.filter((d) => d.itemId).map((d) => d.itemId!))]);
+  const ownedKinds = new Set(state.displays.map((d) => d.kind));
+  const sellable = fresh(unlockedItems(state.level).filter((i) => ownedKinds.has(i.display)).map((i) => i.id));
+  const any = sellable.length > 0 ? sellable : fresh(unlockedItems(state.level).map((i) => i.id));
+  const trending = state.trend ? fresh(unlockedItems(state.level).filter((i) => i.display === state.trend!.kind).map((i) => i.id)) : [];
+  const trendingStocked = stocked.filter((id) => trending.includes(id));
+  const prefers = ARCHETYPES[kind].prefers;
+  const weight = (id: string) => {
+    const display = itemById(id).display;
+    return weatherDemand(state, display) * (prefers.includes(display) ? 3 : 1);
+  };
+
+  // El ladrón solo va a por lo que ve en los estantes.
+  if (kind === 'thief') return stocked.length > 0 ? pickWeighted(stocked, weight, rng) : null;
+  if (kind === 'vip') return pick(stocked.length > 0 && rng() < 0.6 ? stocked : any, rng) ?? null;
+  if (trending.length > 0 && rng() < 0.3) return pick(trendingStocked.length > 0 && rng() < 0.85 ? trendingStocked : trending, rng);
+  const r = rng();
+  if (stocked.length > 0 && r < 0.88) return pickWeighted(stocked, weight, rng);
+  if (carried.length > 0 && r < 0.97) return pick(carried, rng);
+  return any.length > 0 ? pick(any, rng) : null;
+}
+
+/** Busca el expositor más cercano con `itemId`, lo aparta y pone al cliente en camino. */
+function goToItem(state: GameState, c: Customer, itemId: string, from: Point, prefix: Point[] = []): boolean {
+  const blocked = blockedTiles(state);
+  let best: { display: Display; path: Point[] } | null = null;
+  for (const d of state.displays) {
+    if (d.itemId !== itemId || available(d) <= 0) continue;
+    const path = pathToFurniture(state, from, d, blocked);
+    if (path && (!best || path.length < best.path.length)) best = { display: d, path };
+  }
+  if (!best) return false;
+  best.display.reserved++;
+  c.itemId = itemId;
+  c.state = 'toDisplay';
+  c.displayId = best.display.id;
+  c.path = [...prefix, ...best.path];
+  return true;
+}
+
+export function spawnCustomer(
+  state: GameState,
+  rng: Rng,
+  kind: CustomerKind = pickArchetype(state.level, new Set(state.customers.map((c) => c.kind)), rng),
+): Customer {
   const { w } = storeSize(state);
   const sy = sidewalkY(state);
   const door = doorTile(state);
+  let desire = chooseDesire(state, kind, rng);
+  if (desire === null) {
+    // Sin nada a la vista no hay ladrón que valga: llega un cliente normal.
+    kind = 'regular';
+    desire = chooseDesire(state, kind, rng) ?? unlockedItems(state.level)[0].id;
+  }
+  const def = ARCHETYPES[kind];
   // Aparecen por la acera a pocos pasos de la puerta (el render los hace aparecer con un fundido).
   const startX = Math.min(w + 1, door.x + (rng() < 0.5 ? -1 : 1) * (2 + rng() * 3));
   const customer: Customer = {
@@ -378,38 +433,38 @@ export function spawnCustomer(state: GameState, rng: Rng, vip = state.level >= 3
     y: sy,
     path: [],
     state: 'lost',
-    itemId: chooseDesire(state, vip, rng),
+    kind,
+    itemId: desire,
+    wants: [],
+    basket: [],
+    speed: def.speed,
     displayId: null,
     registerId: null,
     carrying: false,
-    vip,
+    vip: kind === 'vip',
     timer: COMPLAIN_SEC,
     waited: 0,
     age: 0,
     look: Math.floor(rng() * 1000),
   };
-  const entry = [{ x: door.x, y: sy }, door];
-  const blocked = blockedTiles(state);
-
-  // El expositor con ese artículo al que se llega antes.
-  let best: { display: Display; path: Point[] } | null = null;
-  for (const d of state.displays) {
-    if (d.itemId !== customer.itemId || available(d) <= 0) continue;
-    const path = pathToFurniture(state, door, d, blocked);
-    if (path && (!best || path.length < best.path.length)) best = { display: d, path };
+  // Lista de la compra: uno o dos artículos más, distintos.
+  if (kind === 'list') {
+    const extra = 1 + Math.floor(rng() * 2);
+    for (let i = 0; i < extra; i++) {
+      const next = chooseDesire(state, kind, rng, [desire, ...customer.wants]);
+      if (next) customer.wants.push(next);
+    }
   }
-  if (best) {
-    best.display.reserved++;
-    customer.state = 'toDisplay';
-    customer.displayId = best.display.id;
-    customer.path = [...entry, ...best.path];
-  } else {
+  const entry = [{ x: door.x, y: sy }, door];
+  if (!goToItem(state, customer, desire, door, entry)) {
     // No lo encuentra: da una vuelta por la tienda buscándolo.
+    const blocked = blockedTiles(state);
     const reach = [...reachableFromDoor(state, blocked)].map((k) => k.split(',').map(Number));
     const [tx, ty] = pick(reach.length > 0 ? reach : [[door.x, door.y]], rng);
     customer.path = [...entry, ...(findPath(state, door, { x: tx, y: ty }, blocked) ?? [])];
   }
-  if (vip) state.events.push({ type: 'vipArrived', itemId: customer.itemId });
+  if (kind === 'vip') state.events.push({ type: 'vipArrived', itemId: customer.itemId });
+  if (kind === 'thief') state.events.push({ type: 'thiefArrived' });
   state.customers.push(customer);
   return customer;
 }
@@ -428,7 +483,7 @@ function pathToFurniture(state: GameState, from: Point, target: Point, blocked =
 
 /** Avanza por el camino; devuelve true si ya ha llegado al final. */
 function walk(c: Customer, dt: number): boolean {
-  let step = WALK_SPEED * dt;
+  let step = c.speed * dt;
   while (step > 0 && c.path.length > 0) {
     const next = c.path[0];
     const dx = next.x - c.x;
@@ -448,8 +503,18 @@ function walk(c: Customer, dt: number): boolean {
   return c.path.length === 0;
 }
 
+/** Devuelve a los estantes lo que llevaba en la cesta (cuando se va sin pagar). */
+function returnBasket(state: GameState, c: Customer) {
+  for (const id of c.basket) {
+    const d = state.displays.find((x) => x.itemId === id && x.stock < capacity(state, x.kind));
+    if (d) d.stock++;
+  }
+  c.basket = [];
+  c.carrying = false;
+}
+
 function leave(state: GameState, c: Customer) {
-  if (c.state === 'toDisplay') {
+  if (c.state === 'toDisplay' || c.state === 'browsing') {
     const d = displayById(state, c.displayId);
     if (d) d.reserved = Math.max(0, d.reserved - 1);
   }
@@ -461,6 +526,28 @@ function leave(state: GameState, c: Customer) {
   const inside = c.y < sy - 0.5;
   const toDoor = inside ? findPath(state, c, door) ?? [door] : [];
   c.path = [...toDoor, ...(inside ? [{ x: door.x, y: sy }] : []), { x: c.look % 2 === 0 ? -2 : w + 1, y: sy }];
+}
+
+/** El ladrón sale corriendo hacia la calle con el botín. */
+function flee(state: GameState, c: Customer) {
+  leave(state, c);
+  c.state = 'fleeing';
+  c.speed = THIEF_FLEE_SPEED;
+}
+
+/** El jugador toca al ladrón: recupera lo robado y gana una recompensa. */
+export function catchThief(state: GameState, customerId: number): ActionResult {
+  const c = state.customers.find((x) => x.id === customerId);
+  if (!c || c.kind !== 'thief' || c.state === 'leaving') return fail('Ahí no hay ningún ladrón');
+  const item = itemById(c.itemId);
+  const reward = Math.max(20, salePrice(state, item) * (c.carrying ? 3 : 2));
+  returnBasket(state, c);
+  state.coins += reward;
+  state.stats.thievesCaught++;
+  state.events.push({ type: 'thiefCaught', reward, x: c.x, y: c.y });
+  leave(state, c);
+  c.speed = ARCHETYPES.thief.speed;
+  return ok;
 }
 
 interface Queue {
@@ -534,12 +621,18 @@ function updateCustomer(state: GameState, c: Customer, dt: number, queues: Map<n
       d.stock--;
       d.reserved = Math.max(0, d.reserved - 1);
       c.carrying = true;
+      c.basket.push(c.itemId);
+      state.events.push({ type: 'pickup', displayId: d.id, customerId: c.id, itemId: c.itemId });
+      if (c.kind === 'thief') return flee(state, c);
+      // Con lista: a por lo siguiente que haya; lo que no encuentre, se lo salta.
+      while (c.wants.length > 0) {
+        if (goToItem(state, c, c.wants.shift()!, c)) return;
+      }
       c.state = 'queue';
       c.registerId = shortestQueue(state).id;
       // `timer` sirve de turno en la cola: quien llegó antes, paga antes.
       c.timer = state.time;
       c.waited = 0;
-      state.events.push({ type: 'pickup', displayId: d.id, customerId: c.id, itemId: c.itemId });
       return;
     }
     case 'queue': {
@@ -557,14 +650,10 @@ function updateCustomer(state: GameState, c: Customer, dt: number, queues: Map<n
         c.path = path && path.length > 0 ? path : [slot];
       }
       c.waited += dt;
-      if (c.waited > (c.vip ? VIP_PATIENCE_SEC : PATIENCE_SEC) && idx > 0) {
-        // Se cansa de esperar: deja el artículo y se va enfadado.
-        const d = displayById(state, c.displayId);
-        if (d && d.itemId === c.itemId) d.stock = Math.min(capacity(state, d.kind), d.stock + 1);
-        c.carrying = false;
-        state.mood = clamp(state.mood - QUEUE_MOOD_PENALTY, 0, 100);
-        state.stats.lost++;
-        state.events.push({ type: 'unhappy', x: c.x, y: c.y, reason: 'queue' });
+      if (c.waited > PATIENCE_SEC * ARCHETYPES[c.kind].patience && idx > 0) {
+        // Se cansa de esperar: deja lo que llevaba y se va enfadado.
+        returnBasket(state, c);
+        unhappy(state, c, 'queue');
         leave(state, c);
       }
       return;
@@ -573,14 +662,27 @@ function updateCustomer(state: GameState, c: Customer, dt: number, queues: Map<n
       if (!arrived) return;
       c.timer -= dt;
       if (c.timer > 0) return;
-      state.mood = clamp(state.mood - LOST_MOOD_PENALTY, 0, 100);
-      state.stats.lost++;
-      state.events.push({ type: 'unhappy', x: c.x, y: c.y, reason: 'missing' });
+      unhappy(state, c, 'missing');
       return leave(state, c);
     case 'leaving':
       if (arrived) state.customers = state.customers.filter((o) => o.id !== c.id);
       return;
+    case 'fleeing':
+      if (!arrived) return;
+      // Se ha escapado con el botín.
+      state.stats.stolen++;
+      state.events.push({ type: 'stolen', itemId: c.itemId });
+      state.customers = state.customers.filter((o) => o.id !== c.id);
+      return;
   }
+}
+
+/** Un cliente se va descontento; si es un crítico, la mala reseña pesa mucho más. */
+function unhappy(state: GameState, c: Customer, reason: 'missing' | 'queue') {
+  const penalty = c.kind === 'critic' ? CRITIC_MOOD : reason === 'queue' ? QUEUE_MOOD_PENALTY : LOST_MOOD_PENALTY;
+  state.mood = clamp(state.mood - penalty, 0, 100);
+  state.stats.lost++;
+  state.events.push({ type: 'unhappy', x: c.x, y: c.y, reason, critic: c.kind === 'critic' });
 }
 
 const isBlockedAt = (state: GameState, c: Customer) => blockedTiles(state).has(`${Math.round(c.x)},${Math.round(c.y)}`);
@@ -602,23 +704,37 @@ function updateRegisters(state: GameState, dt: number, queues: Map<number, Queue
 }
 
 function completeSale(state: GameState, c: Customer, r: Register, rng: Rng) {
-  const item = itemById(c.itemId);
-  const trending = isTrending(state, item);
-  const amount = salePrice(state, item) * (c.vip ? VIP_PRICE_MULTIPLIER : 1);
+  const def = ARCHETYPES[c.kind];
+  const s = state.stats;
+  let amount = 0;
+  let xp = 0;
+  for (const id of c.basket) {
+    const item = itemById(id);
+    amount += Math.round(salePrice(state, item) * def.price);
+    xp += item.xp;
+    s.soldByItem[id] = (s.soldByItem[id] ?? 0) + 1;
+    if (isTrending(state, item)) s.trendSold++;
+  }
   const tip = happiness(state) >= TIP_HAPPINESS && rng() < 0.25 ? Math.ceil(amount * 0.25) : 0;
   const gem = c.vip && rng() < 0.5;
   state.coins += amount + tip;
   if (gem) state.gems++;
   state.mood = clamp(state.mood + (c.vip ? 3 : SALE_MOOD_BONUS), 0, 100);
-  const s = state.stats;
-  s.sold++;
+  s.sold += c.basket.length;
   s.earned += amount;
   s.tips += tip;
-  s.soldByItem[item.id] = (s.soldByItem[item.id] ?? 0) + 1;
   if (c.vip) s.vipServed++;
-  if (trending) s.trendSold++;
+  if (c.kind === 'list') s.listServed++;
+  if (c.kind === 'critic') {
+    // Buena reseña: sube el ánimo y la tienda se hace viral un rato.
+    state.mood = clamp(state.mood + CRITIC_MOOD, 0, 100);
+    state.boostUntil = state.time + VIRAL_MS;
+    s.criticsHappy++;
+    state.events.push({ type: 'criticHappy', x: c.x, y: c.y });
+  }
   state.events.push({ type: 'sale', amount, tip, vip: c.vip, gem, registerId: r.id, x: c.x, y: c.y });
-  addXp(state, item.xp * (c.vip ? 2 : 1));
+  addXp(state, xp * (c.vip ? 2 : 1));
+  c.basket = [];
   c.carrying = false;
   leave(state, c);
 }

@@ -27,7 +27,7 @@ describe('guardado', () => {
   it('descarta clientes y libera reservas', () => {
     const s = createInitialState(T0);
     Object.assign(s.displays[0], { itemId: 'tshirt', stock: 10 });
-    spawnCustomer(s, () => 0, false);
+    spawnCustomer(s, () => 0, 'regular');
     const loaded = deserialize(serialize(s));
     expect(loaded.customers).toEqual([]);
     expect(loaded.displays[0].reserved).toBe(0);

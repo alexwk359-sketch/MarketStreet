@@ -1,5 +1,7 @@
 import { DECOR, DISPLAYS, itemById, type DisplayKind, type UpgradeId } from '../sim/catalog';
 import type { OfflineSummary } from '../sim/offline';
+import { declineOrder, fulfillOrder } from '../sim/orders';
+import { WEATHER } from '../sim/world';
 import type { FurnitureRef } from '../sim/path';
 import { clearSave, saveGame } from '../sim/save';
 import {
@@ -8,6 +10,7 @@ import {
   buyExpansion,
   buyRegister,
   buyUpgrade,
+  catchThief,
   moveFurniture,
   orderStock,
   rushOrder,
@@ -90,6 +93,37 @@ export class Controller {
           break;
         case 'unhappy':
           sfx.angry();
+          if (e.critic) this.toast('El crítico se ha ido decepcionado: ¡mala reseña!', 'error');
+          break;
+        case 'thiefArrived':
+          sfx.siren();
+          this.toast('¡Cuidado, ha entrado un ladrón! Tócalo para atraparlo', 'error');
+          break;
+        case 'stolen':
+          this.toast(`El ladrón escapó con ${itemById(e.itemId).name.toLowerCase()}`, 'error');
+          break;
+        case 'thiefCaught':
+          sfx.caught();
+          this.toast(`¡Ladrón atrapado! Recompensa: ${e.reward} monedas`, 'good');
+          break;
+        case 'criticHappy':
+          sfx.levelUp();
+          this.toast('¡Reseña de cinco estrellas! La tienda se hace viral: llegan más clientes', 'good');
+          break;
+        case 'weather': {
+          const w = WEATHER[e.kind];
+          this.toast(`${w.name}: ${w.hint}`, 'info');
+          break;
+        }
+        case 'orderNew':
+          sfx.order();
+          this.toast('Nuevo encargo especial', 'good');
+          break;
+        case 'orderDone':
+          sfx.claim();
+          break;
+        case 'orderExpired':
+          this.toast('El encargo ha caducado', 'error');
           break;
         case 'vipArrived':
           sfx.vip();
@@ -232,6 +266,21 @@ export class Controller {
 
   useStyle(id: string) {
     this.act(useStyle(this.state, id), () => sfx.place());
+  }
+
+  catchThief(customerId: number) {
+    this.act(catchThief(this.state, customerId));
+  }
+
+  fulfillOrder() {
+    this.act(fulfillOrder(this.state), () => this.toast('¡Encargo entregado!', 'good'));
+  }
+
+  declineOrder() {
+    declineOrder(this.state);
+    sfx.click();
+    this.save();
+    this.notify();
   }
 
   claim(taskId: string) {

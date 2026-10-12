@@ -1,4 +1,7 @@
+import type { CustomerKind } from './archetypes';
 import { EXPANSIONS, type DisplayKind, type UpgradeId } from './catalog';
+import type { SpecialOrder } from './orders';
+import type { WeatherKind } from './world';
 
 export const SAVE_VERSION = 2;
 
@@ -41,7 +44,7 @@ export interface PlacedDecor {
   y: number;
 }
 
-export type CustomerState = 'toDisplay' | 'browsing' | 'queue' | 'lost' | 'leaving';
+export type CustomerState = 'toDisplay' | 'browsing' | 'queue' | 'lost' | 'leaving' | 'fleeing';
 
 export interface Customer {
   id: number;
@@ -50,7 +53,15 @@ export interface Customer {
   /** Puntos de paso pendientes; el último es el destino. */
   path: Point[];
   state: CustomerState;
+  kind: CustomerKind;
+  /** Artículo que busca ahora. */
   itemId: string;
+  /** Lo que aún le queda por coger (clientes con lista de la compra). */
+  wants: string[];
+  /** Lo que ya lleva para pagar. */
+  basket: string[];
+  /** Casillas por segundo. */
+  speed: number;
   displayId: number | null;
   registerId: number | null;
   carrying: boolean;
@@ -66,13 +77,21 @@ export interface Customer {
 
 export type SimEvent =
   | { type: 'sale'; amount: number; tip: number; vip: boolean; gem: boolean; registerId: number; x: number; y: number }
-  | { type: 'unhappy'; x: number; y: number; reason: 'missing' | 'queue' }
+  | { type: 'unhappy'; x: number; y: number; reason: 'missing' | 'queue'; critic: boolean }
   | { type: 'pickup'; displayId: number; customerId: number; itemId: string }
   | { type: 'delivered'; displayId: number; itemId: string }
   | { type: 'autoOrder'; displayId: number; itemId: string }
   | { type: 'vipArrived'; itemId: string }
   | { type: 'trend'; kind: DisplayKind }
-  | { type: 'levelUp'; level: number };
+  | { type: 'levelUp'; level: number }
+  | { type: 'thiefArrived' }
+  | { type: 'stolen'; itemId: string }
+  | { type: 'thiefCaught'; reward: number; x: number; y: number }
+  | { type: 'criticHappy'; x: number; y: number }
+  | { type: 'weather'; kind: WeatherKind }
+  | { type: 'orderNew' }
+  | { type: 'orderDone'; coins: number }
+  | { type: 'orderExpired' };
 
 export interface Stats {
   sold: number;
@@ -84,6 +103,11 @@ export interface Stats {
   trendSold: number;
   upgradesBought: number;
   stylesBought: number;
+  thievesCaught: number;
+  stolen: number;
+  ordersDone: number;
+  listServed: number;
+  criticsHappy: number;
   soldByItem: Record<string, number>;
 }
 
@@ -107,6 +131,12 @@ export interface GameState {
   ownedStyles: string[];
   upgrades: Partial<Record<UpgradeId, number>>;
   trend: { kind: DisplayKind; until: number } | null;
+  weather: { kind: WeatherKind; until: number } | null;
+  specialOrder: SpecialOrder | null;
+  /** Cuándo puede llegar el próximo encargo (0 = aún no se ha programado). */
+  nextOrderAt: number;
+  /** Hasta cuándo dura el efecto "viral" de un crítico contento. */
+  boostUntil: number;
   claimedTasks: string[];
   customers: Customer[];
   spawnTimer: number;
@@ -140,6 +170,11 @@ export const emptyStats = (): Stats => ({
   trendSold: 0,
   upgradesBought: 0,
   stylesBought: 0,
+  thievesCaught: 0,
+  stolen: 0,
+  ordersDone: 0,
+  listServed: 0,
+  criticsHappy: 0,
   soldByItem: {},
 });
 
@@ -161,6 +196,10 @@ export function createInitialState(now: number): GameState {
     ownedStyles: ['wood', 'cream'],
     upgrades: {},
     trend: null,
+    weather: null,
+    specialOrder: null,
+    nextOrderAt: 0,
+    boostUntil: 0,
     claimedTasks: [],
     customers: [],
     spawnTimer: 2,

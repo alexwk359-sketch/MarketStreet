@@ -5,13 +5,12 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import {
   CASHIER_POSES,
   CASHIER_VARIANTS,
-  CUSTOMER_VARIANTS,
+  CHARACTER_SETS,
   DIRECTIONS,
   IDLE_POSE,
   REACH_POSE,
   WALK_FRAMES,
   cashierSpec,
-  customerSpec,
   makeCharacter,
   walkPose,
 } from './characters.js';
@@ -149,8 +148,10 @@ window.renderSheets = () => {
   const camera = characterCamera();
   const customerPoses = [...Array.from({ length: WALK_FRAMES }, (_, f) => walkPose(f)), IDLE_POSE, REACH_POSE];
   const out = [];
-  for (let v = 0; v < CUSTOMER_VARIANTS; v++) {
-    out.push({ name: `people/customer-${v}`, dataUrl: renderSheet(renderer, env, camera, customerSpec(v), customerPoses, DIRECTIONS) });
+  for (const set of CHARACTER_SETS) {
+    for (let v = 0; v < set.count; v++) {
+      out.push({ name: `people/${set.name}-${v}`, dataUrl: renderSheet(renderer, env, camera, set.spec(v), customerPoses, DIRECTIONS) });
+    }
   }
   // Los cajeros solo se ven de frente (mirando a los clientes, se voltean en el juego).
   for (let v = 0; v < CASHIER_VARIANTS; v++) {

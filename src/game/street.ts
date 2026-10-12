@@ -1,8 +1,9 @@
 // La calle de fuera: acera, calzada, árboles, farolas, peatones y tráfico.
 // Es pura ambientación: no forma parte de la simulación.
 import Phaser from 'phaser';
+import type { Point } from './iso';
 import { at, box, diamond, FONT, raise, TEXT_RESOLUTION, tileCenter } from './draw';
-import { CUSTOMER_VARIANTS, STREET_VEHICLES } from './sprites';
+import { CHARACTER_SHEETS, STREET_VEHICLES, characterKey } from './sprites';
 
 interface Walker {
   sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
@@ -17,6 +18,9 @@ interface Walker {
   stopX?: number;
 }
 
+/** Hojas de peatones, repetidas según lo frecuentes que son. */
+const PEDESTRIAN_SHEETS: (keyof typeof CHARACTER_SHEETS)[] = ['customer', 'customer', 'customer', 'kid', 'senior', 'tourist'];
+
 const EXTRA = 5; // casillas de calle a cada lado de la tienda
 export const SIDEWALK_DEPTH = 1.2;
 const ROAD_FROM = 1.35;
@@ -26,6 +30,8 @@ export class Street {
   private ground: Phaser.GameObjects.Graphics;
   private props: Phaser.GameObjects.Container;
   private walkers: Walker[] = [];
+  /** Dónde están las bombillas de las farolas (para iluminarlas de noche). */
+  lampHeads: Point[] = [];
   private spawnPeople = 1;
   private spawnCars = 2;
   private w = 0;
@@ -53,6 +59,7 @@ export class Street {
     for (let i = 0; i < 5; i++) diamond(g, w - 1.4 + i * 0.36, h + ROAD_FROM + 0.1, w - 1.22 + i * 0.36, h + ROAD_TO - 0.1, 0xf1f3f5);
 
     this.props.removeAll(true);
+    this.lampHeads = [];
     const trees = [-3.8, w + 1.5, w + 3.5];
     for (const tx of trees) this.addTree(tx, h + 0.55, tx < 0 ? 'pine' : 'tree');
     for (let y = 1; y < h; y += 3) this.addTree(w + 1.6, y, y % 2 ? 'tree' : 'pine');
@@ -76,6 +83,7 @@ export class Street {
     g.fillStyle(0x343a40).fillRect(p.x - 1.5, p.y - 58, 3, 58);
     g.fillStyle(0x343a40).fillRoundedRect(p.x - 7, p.y - 64, 14, 8, 3);
     g.fillStyle(0xffe066, 0.9).fillCircle(p.x, p.y - 54, 4);
+    this.lampHeads.push({ x: p.x, y: p.y - 54 });
     this.props.add(this.scene.add.container(0, 0, [g]).setDepth(x + y + 1));
   }
 
@@ -126,9 +134,11 @@ export class Street {
       sprite = this.scene.add.image(0, 0, key).setOrigin(0.5, 0.92).setDisplaySize(54, 54).setFlipX(dir > 0);
     } else {
       // Peatones: hacia +x caminan de frente; hacia -x, de espaldas y volteados.
-      const variant = Phaser.Math.Between(0, CUSTOMER_VARIANTS - 1);
-      sprite = this.scene.add.sprite(0, 0, `cust:${variant}`).setOrigin(0.5, 0.9).setScale(0.5).setFlipX(dir < 0);
-      (sprite as Phaser.GameObjects.Sprite).play(`cust:${variant}:walk-${dir > 0 ? 'front' : 'back'}`);
+      // Por la calle pasa de todo: adultos, niños, abuelos y turistas.
+      const sheet = Phaser.Utils.Array.GetRandom(PEDESTRIAN_SHEETS);
+      const key = characterKey(sheet, Phaser.Math.Between(0, CHARACTER_SHEETS[sheet] - 1));
+      sprite = this.scene.add.sprite(0, 0, key).setOrigin(0.5, 0.9).setScale(0.5).setFlipX(dir < 0);
+      (sprite as Phaser.GameObjects.Sprite).play(`${key}:walk-${dir > 0 ? 'front' : 'back'}`);
     }
     sprite.setAlpha(0);
     const speed = (vehicle ? 3 + Math.random() * 2 : 0.8 + Math.random() * 0.5) * dir;

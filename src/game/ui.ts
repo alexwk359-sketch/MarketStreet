@@ -31,7 +31,9 @@ import {
   xpForLevel,
 } from '../sim/sim';
 import type { GameState } from '../sim/state';
+import { orderStockAvailable } from '../sim/orders';
 import { activeTasks, claimableCount, isTaskDone, TASKS } from '../sim/tasks';
+import { dayPeriod, PERIODS, weatherOf, type DayPeriod, type WeatherKind } from '../sim/world';
 import type { Controller, PanelId, ToastKind } from './controller';
 import { formatTime } from './format';
 import { sfx } from './sound';
@@ -166,9 +168,24 @@ export function mountUi(controller: Controller) {
     }
   });
 
+  const order = $('#order');
+  order.addEventListener('click', (e) => {
+    const action = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
+    if (!action || (action as HTMLButtonElement).disabled) return;
+    if (action.dataset.action === 'fulfill-order') controller.fulfillOrder();
+    if (action.dataset.action === 'decline-order') controller.declineOrder();
+  });
+  let lastOrderHtml = '';
+
   const render = () => {
     const s = controller.state;
     hud.innerHTML = hudHtml(s);
+    const orderCard = orderHtml(s);
+    order.hidden = !orderCard;
+    if (orderCard !== lastOrderHtml) {
+      order.innerHTML = orderCard;
+      lastOrderHtml = orderCard;
+    }
 
     const label = controller.placementLabel();
     placing.hidden = !label;
@@ -217,6 +234,13 @@ function hudHtml(s: GameState): string {
   const hap = Math.round(happiness(s));
   const xpFrom = xpForLevel(s.level);
   const xpTo = xpForLevel(s.level + 1);
+  const weather = weatherOf(s);
+  const period = dayPeriod(s.time);
+  const world = `<span class="chip world" title="${weather.name}: ${weather.hint}">${ui(WEATHER_ICONS[weather.kind])}${ui(PERIOD_ICONS[period])}
+      <span>${weather.name} · ${PERIODS[period].name}</span></span>`;
+  const viral = s.time < s.boostUntil
+    ? `<span class="chip viral" title="Un crítico habló bien de la tienda: llegan más clientes">${ui('hundred')} Viral <small>${formatTime(s.boostUntil - s.time)}</small></span>`
+    : '';
   const trend = s.trend
     ? `<span class="chip trend" title="Esta categoría se vende un 25% más cara y atrae más clientes">
         ${ui('fire')} ${DISPLAYS[s.trend.kind].category} <small>${formatTime(s.trend.until - s.time)}</small></span>`
@@ -228,8 +252,30 @@ function hudHtml(s: GameState): string {
       <span class="bar"><span style="width:${((s.xp - xpFrom) / (xpTo - xpFrom)) * 100}%"></span></span></span>
     <span class="stat" title="Felicidad de la clientela">${ui(hap >= 50 ? 'love' : 'angry')} <b>${hap}%</b>
       <span class="bar happy"><span style="width:${hap}%"></span></span></span>
-    ${trend}
+    ${world}${viral}${trend}
     <button class="sound" data-action="sound" title="Sonido">${ui(sfx.muted ? 'mute' : 'sound')}</button>`;
+}
+
+const WEATHER_ICONS: Record<WeatherKind, UiSprite> = { sunny: 'sun', cloudy: 'cloudsun', rain: 'rain', heat: 'hot', snow: 'snow' };
+const PERIOD_ICONS: Record<DayPeriod, UiSprite> = { morning: 'sunrise', day: 'sun', evening: 'sunset', night: 'moon' };
+
+/** Tarjeta del encargo especial en curso. */
+function orderHtml(s: GameState): string {
+  const o = s.specialOrder;
+  if (!o) return '';
+  const item = ITEMS.find((i) => i.id === o.itemId)!;
+  const have = Math.min(o.qty, orderStockAvailable(s, o.itemId));
+  const ready = have >= o.qty;
+  return `<div class="order-card">
+    <div class="order-head">${ui('memo')} <b>Encargo</b> <small>${o.client}</small>
+      <button class="x" data-action="decline-order" title="Rechazar">✕</button></div>
+    <div class="order-body">${img(itemSprite(item.id), 'order-item')}
+      <span><b>${o.qty} ${item.name.toLowerCase()}</b>
+      <span class="task-bar small"><span style="width:${(have / o.qty) * 100}%"></span></span> ${have}/${o.qty} en estantes</span></div>
+    <div class="order-foot"><span>${ui('hourglass')} ${formatTime(o.expiresAt - s.time)}</span>
+      <span class="reward">${coins(o.reward.coins)} ${gems(o.reward.gems)}</span>
+      <button data-action="fulfill-order" ${ready ? '' : 'disabled'}>${ready ? 'Entregar' : 'Faltan'}</button></div>
+  </div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +482,10 @@ const HELP_HTML = `
     <li>Atento a la <b>tendencia</b>: esa categoría se vende un 25% más cara.</li>
     <li>Los clientes <b>VIP</b> (con corona) pagan el triple y a veces dejan un diamante.</li>
     <li>Completa las <b>tareas</b> del encargado y compra <b>mejoras</b> para crecer más rápido.</li>
+    <li>Hay muchos tipos de cliente: <b>con lista</b> (compran varias cosas), <b>niños</b>, <b>abuelos</b> (lentos pero pacientes), <b>turistas</b> (pagan más) y <b>críticos</b>: si salen contentos, la tienda se hace viral.</li>
+    <li>¡Ojo con los <b>ladrones</b>! Si ves a uno huyendo con la sirena encima, tócalo para atraparlo.</li>
+    <li>El <b>tiempo</b> y la <b>hora</b> cambian la clientela: con calor se venden helados; con lluvia, ropa y pan; de noche viene menos gente.</li>
+    <li>Atiende los <b>encargos especiales</b>: pide muchas unidades a tiempo y entrégalas desde la tarjeta para una gran recompensa.</li>
     <li>Toca un mueble para <b>moverlo o venderlo</b>. Arrastra para mover la vista; usa la rueda o pellizca para hacer zoom.</li>
   </ol>
   <p class="muted">La partida se guarda sola en este navegador. Mientras no juegas, los pedidos llegan y la tienda sigue vendiendo (más despacio).</p>
