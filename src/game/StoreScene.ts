@@ -1,43 +1,75 @@
 import Phaser from 'phaser';
-import { DECOR, DISPLAYS, ITEMS, type DisplayKind } from '../sim/catalog';
-import { available, isTileFree } from '../sim/sim';
+import { DECOR, FLOORS, FURNITURE_DECOR, ITEMS, WALLS, type DisplayKind } from '../sim/catalog';
+import { placementError, type FurnitureKind, type FurnitureRef } from '../sim/path';
+import { available, capacity } from '../sim/sim';
 import {
-  ENTRANCE,
-  GRID_H,
-  GRID_W,
-  REGISTER,
+  doorTile,
+  registerFront,
+  sidewalkY,
+  storeSize,
   type Customer,
   type Display,
   type PlacedDecor,
+  type Register,
   type SimEvent,
 } from '../sim/state';
 import type { Controller } from './controller';
+import { at, diamond, FONT, raise, TEXT_RESOLUTION, tileCenter } from './draw';
+import { Effects } from './effects';
 import { formatTime } from './format';
-import { TILE_H, isoToScreen, screenToIso, shade, type Point } from './iso';
-import { DRAWN_DECOR, PEOPLE, UI_SPRITES, decorSprite, itemSprite, personSprite, uiSprite } from './sprites';
+import { TILE_H, screenToIso, shade, type Point } from './iso';
+import {
+  FURNITURE_SPRITES,
+  PEOPLE,
+  STAFF,
+  STREET_SPRITES,
+  UI_SPRITES,
+  decorSprite,
+  furnitureSprite,
+  itemSprite,
+  personSprite,
+  staffSprite,
+  streetSprite,
+  uiSprite,
+} from './sprites';
+import { Street } from './street';
 
-const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 const WALL_HEIGHT = 70;
-// El texto se rasteriza a más resolución para que siga nítido con zoom.
-const TEXT_RESOLUTION = Math.min(4, (window.devicePixelRatio || 1) * 2);
 const PERSON_SIZE = 46;
-const FX_DEPTH = 1000;
+const MIN_ZOOM = 0.4;
+const MAX_ZOOM = 2.6;
+const DRAG_THRESHOLD = 8;
+/** Segundos que tarda un cliente en aparecer del todo. */
+const ENTRANCE_FADE = 0.5;
 
-/** Forma de cada expositor y cómo se colocan los productos encima. */
+/**
+ * Cómo se colocan los productos sobre cada mueble 3D (ver scripts/furniture/models.js).
+ * Alturas en píxeles del juego (1 unidad 3D ≈ 39 px).
+ */
 interface DisplayShape {
+  /** Altura de la superficie donde van los productos. */
   height: number;
-  /** Posiciones de los productos en coordenadas locales de la casilla (0-1), de atrás hacia delante. */
-  slots: Point[];
+  /** Altura total del mueble: para la etiqueta y para poder tocarlo. */
+  top: number;
+  /** Posiciones de los productos en la casilla (0-1), en el orden en que se llenan; `h` cambia la altura. */
+  slots: Slot[];
   productSize: number;
+  /** Capa de cristal que va por encima de los productos. */
+  glass?: string;
 }
 
-const grid = (cols: number, rows: number, from = 0.28, to = 0.72): Point[] => {
-  const pts: Point[] = [];
+interface Slot extends Point {
+  h?: number;
+}
+
+const grid = (cols: number, rows: number, from = 0.28, to = 0.72, fromY = from, toY = to, h?: number): Slot[] => {
+  const pts: Slot[] = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       pts.push({
         x: cols === 1 ? 0.5 : from + ((to - from) * c) / (cols - 1),
-        y: rows === 1 ? 0.5 : from + ((to - from) * r) / (rows - 1),
+        y: rows === 1 ? (fromY + toY) / 2 : fromY + ((toY - fromY) * r) / (rows - 1),
+        h,
       });
     }
   }
@@ -45,24 +77,62 @@ const grid = (cols: number, rows: number, from = 0.28, to = 0.72): Point[] => {
 };
 
 const SHAPES: Record<DisplayKind, DisplayShape> = {
-  // En el perchero la ropa cuelga de la barra (ver drawRack).
-  rack: { height: 42, slots: grid(5, 1, 0.2, 0.8).map((p) => ({ x: p.x, y: 0.5 })), productSize: 24 },
-  shelf: { height: 30, slots: grid(3, 2), productSize: 19 },
-  case: { height: 16, slots: grid(2, 2, 0.32, 0.68), productSize: 20 },
-  table: { height: 14, slots: grid(3, 2, 0.25, 0.75), productSize: 22 },
+  // En el perchero la ropa cuelga de la barra.
+  rack: { height: 41, top: 44, slots: grid(5, 1, 0.24, 0.78, 0.5, 0.5), productSize: 24 },
+  shelf: { height: 31, top: 33, slots: grid(3, 2, 0.25, 0.75), productSize: 19 },
+  case: { height: 18, top: 32, slots: grid(2, 2, 0.3, 0.7), productSize: 20, glass: 'case-glass' },
+  table: { height: 16, top: 18, slots: grid(3, 2, 0.25, 0.75), productSize: 22 },
+  boutique: { height: 20, top: 42, slots: grid(2, 2, 0.3, 0.7, 0.5, 0.78), productSize: 20 },
+  sports: { height: 5, top: 14, slots: grid(2, 2, 0.32, 0.72), productSize: 28 },
+  // Frutería: fila de atrás más alta que la de delante.
+  fruit: { height: 15, top: 46, slots: [...grid(3, 1, 0.22, 0.78, 0.3, 0.3, 23), ...grid(3, 1, 0.22, 0.78, 0.7, 0.7, 15)], productSize: 18 },
+  veggie: { height: 19, top: 22, slots: grid(3, 2, 0.24, 0.76, 0.36, 0.65), productSize: 18 },
+  bakery: { height: 19, top: 31, slots: grid(3, 2, 0.24, 0.76, 0.38, 0.66), productSize: 18, glass: 'bakery-glass' },
+  butcher: { height: 19, top: 30, slots: grid(3, 2, 0.25, 0.72, 0.45, 0.7), productSize: 18, glass: 'butcher-glass' },
+  cheese: { height: 19, top: 36, slots: grid(2, 2, 0.28, 0.6, 0.5, 0.76), productSize: 22 },
+  // Nevera: tres baldas que se llenan de abajo arriba.
+  fridge: {
+    height: 4,
+    top: 50,
+    slots: [4, 18, 32].flatMap((h) => grid(3, 1, 0.28, 0.72, 0.56, 0.56, h)),
+    productSize: 15,
+    glass: 'fridge-glass',
+  },
+  freezer: { height: 15, top: 20, slots: grid(3, 2, 0.25, 0.75, 0.3, 0.7), productSize: 18, glass: 'freezer-glass' },
 };
 
-const DECOR_SIZE: Record<string, number> = { plant: 36, cactus: 32, sunflower: 38, picture: 30, sofa: 58, tree: 60 };
+/** Altura (px) de la decoración 3D, para poder tocarla. */
+const DECOR_3D_HEIGHT: Record<string, number> = { bench: 20, rug: 2, lamp: 50, sofa: 26, mannequin: 48, ficus: 48, tree: 46, fountain: 30 };
+
+/** Los sprites de muebles miden 2 casillas de ancho y el centro de la casilla está al 75% de su altura. */
+const FURNITURE_SIZE = 128;
+const FURNITURE_ORIGIN_Y = 0.75;
+
+const DECOR_SIZE: Record<string, number> = {
+  plant: 36, cactus: 32, sunflower: 38, tulip: 34, picture: 30, bouquet: 34, dog: 36,
+  sofa: 58, palm: 66, tree: 60, fountain: 62, moai: 52, statue: 70,
+};
 
 interface DisplayView {
   container: Phaser.GameObjects.Container;
   base: Phaser.GameObjects.Graphics;
+  body: Phaser.GameObjects.Image;
   products: Phaser.GameObjects.Image[];
-  glass: Phaser.GameObjects.Graphics;
+  glass: Phaser.GameObjects.Image | null;
   truck: Phaser.GameObjects.Image;
+  fire: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
   labelKey: string;
   shown: number;
+  itemId: string | null;
+}
+
+interface RegisterView {
+  container: Phaser.GameObjects.Container;
+  g: Phaser.GameObjects.Graphics;
+  body: Phaser.GameObjects.Image;
+  cashier: Phaser.GameObjects.Image;
+  staff: string;
 }
 
 interface CustomerView {
@@ -70,6 +140,7 @@ interface CustomerView {
   shadow: Phaser.GameObjects.Graphics;
   body: Phaser.GameObjects.Image;
   bag: Phaser.GameObjects.Image;
+  crown: Phaser.GameObjects.Image;
   bubble: Phaser.GameObjects.Graphics;
   bubbleIcon: Phaser.GameObjects.Image;
   person: string;
@@ -82,18 +153,29 @@ interface CustomerView {
 interface DecorView {
   container: Phaser.GameObjects.Container;
   g: Phaser.GameObjects.Graphics;
-  image: Phaser.GameObjects.Image | null;
+  image: Phaser.GameObjects.Image;
+  x: number;
+  y: number;
 }
 
 export class StoreScene extends Phaser.Scene {
   private controller!: Controller;
-  private origin: Point = { x: 0, y: 0 };
   private floor!: Phaser.GameObjects.Graphics;
+  private ghost!: Phaser.GameObjects.Graphics;
+  private ghostImage!: Phaser.GameObjects.Image;
+  private street!: Street;
+  private fx!: Effects;
   private hover: Point | null = null;
   private displays = new Map<number, DisplayView>();
+  private registers = new Map<number, RegisterView>();
   private customers = new Map<number, CustomerView>();
   private decor = new Map<number, DecorView>();
-  private register!: { container: Phaser.GameObjects.Container; bag: Phaser.GameObjects.Image; bagScale: number };
+  private size = { w: 0, h: 0 };
+  private fitZoom = 1;
+  private userZoom = 1;
+  private drag: { x: number; y: number; scrollX: number; scrollY: number; moved: boolean } | null = null;
+  private pinch: number | null = null;
+  private placementCache = { key: '', error: null as string | null };
 
   constructor() {
     super('store');
@@ -105,8 +187,14 @@ export class StoreScene extends Phaser.Scene {
 
   preload() {
     for (const item of ITEMS) this.load.image(`item:${item.id}`, itemSprite(item.id));
-    for (const d of DECOR) if (!DRAWN_DECOR.has(d.id)) this.load.image(`decor:${d.id}`, decorSprite(d.id));
+    for (const d of DECOR) this.load.image(`decor:${d.id}`, decorSprite(d.id));
     for (const name of UI_SPRITES) this.load.image(`ui:${name}`, uiSprite(name));
+    for (const name of STREET_SPRITES) this.load.image(`street:${name}`, streetSprite(name));
+    for (const name of STAFF) {
+      this.load.image(`staff:${name}-idle`, staffSprite(name, 'idle'));
+      this.load.image(`staff:${name}-serve`, staffSprite(name, 'serve'));
+    }
+    for (const name of FURNITURE_SPRITES) this.load.image(`furn:${name}`, furnitureSprite(name));
     for (const p of PEOPLE) {
       this.load.image(`person:${p}-walking`, personSprite(p, 'walking'));
       this.load.image(`person:${p}-standing`, personSprite(p, 'standing'));
@@ -114,60 +202,130 @@ export class StoreScene extends Phaser.Scene {
   }
 
   create() {
-    this.floor = this.add.graphics().setDepth(-1);
-    this.createRegister();
-    this.layout();
-    this.scale.on('resize', () => this.layout());
+    this.floor = this.add.graphics().setDepth(-2);
+    this.ghost = this.add.graphics().setDepth(900);
+    this.ghostImage = this.add.image(0, 0, 'ui:package').setDepth(901).setVisible(false);
+    this.street = new Street(this);
+    this.fx = new Effects(this);
+    this.input.addPointer(1);
+    this.scale.on('resize', () => this.fitCamera());
 
-    this.input.on('pointermove', (p: Phaser.Input.Pointer) => {
-      this.hover = this.tileAt(p.worldX, p.worldY);
+    this.input.on('pointerdown', (p: Phaser.Input.Pointer) => this.onPointerDown(p));
+    this.input.on('pointermove', (p: Phaser.Input.Pointer) => this.onPointerMove(p));
+    this.input.on('pointerup', (p: Phaser.Input.Pointer) => this.onPointerUp(p));
+    this.input.on('wheel', (_p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) => {
+      this.setZoom(this.userZoom * (dy > 0 ? 0.9 : 1.1));
     });
-    this.input.on('pointerdown', (p: Phaser.Input.Pointer) => this.onTap(p));
   }
 
   update(time: number, delta: number) {
     this.controller.update(delta, Date.now());
     const events = this.controller.consumeEvents();
+    const { w, h } = storeSize(this.controller.state);
+    if (w !== this.size.w || h !== this.size.h) {
+      this.size = { w, h };
+      this.street.layout(w, h);
+      this.userZoom = 1;
+      this.fitCamera();
+    }
+    this.street.update(Math.min(delta, 100) / 1000);
     this.drawFloor();
-    this.syncDecor();
+    this.syncDecor(time);
+    this.syncRegisters(time);
     this.syncDisplays();
     this.syncCustomers(time);
+    this.drawGhost();
     for (const e of events) this.playEvent(e);
   }
 
   // -------------------------------------------------------------------------
-  // Entrada
+  // Cámara y entrada
   // -------------------------------------------------------------------------
 
-  /** Ajusta el zoom para que la tienda llene la pantalla, dejando hueco para el HUD y la barra. */
-  private layout() {
+  /** Encaja la tienda y la acera en pantalla, dejando hueco para el HUD y la barra inferior. */
+  private fitCamera() {
+    const { w, h } = this.size;
     const { width, height } = this.scale;
-    const left = isoToScreen(0, GRID_H, this.origin).x;
-    const right = isoToScreen(GRID_W, 0, this.origin).x;
-    const top = this.origin.y - WALL_HEIGHT - 40;
-    const bottom = isoToScreen(GRID_W, GRID_H, this.origin).y + 20;
-    const reservedUi = 150;
-    const zoom = Math.min(width / (right - left + 40), (height - reservedUi) / (bottom - top), 1.8);
+    // En pantallas estrechas se encuadra solo la tienda; en anchas, también algo de calle.
+    const narrow = width < 640;
+    const left = at(narrow ? 0 : -1, h + (narrow ? 0.6 : 1.5)).x;
+    const right = at(w + (narrow ? 0.2 : 1.5), 0).x;
+    const top = at(0, 0).y - WALL_HEIGHT - 30;
+    const bottom = at(w, h + 1.6).y;
+    const reservedUi = narrow ? 190 : 150;
+    this.fitZoom = Math.min(width / (right - left), (height - reservedUi) / (bottom - top), 1.8);
     const cam = this.cameras.main;
-    cam.setZoom(Math.max(0.5, zoom));
-    // El HUD ocupa más que la barra inferior: desplazamos un poco la vista hacia abajo.
-    cam.centerOn((left + right) / 2, (top + bottom) / 2 - 10 / cam.zoom);
+    cam.setZoom(Phaser.Math.Clamp(this.fitZoom * this.userZoom, MIN_ZOOM, MAX_ZOOM));
+    cam.centerOn((left + right) / 2, (top + bottom) / 2 - 12 / cam.zoom);
+  }
+
+  private setZoom(userZoom: number) {
+    const cam = this.cameras.main;
+    const zoom = Phaser.Math.Clamp(this.fitZoom * userZoom, MIN_ZOOM, MAX_ZOOM);
+    this.userZoom = zoom / this.fitZoom;
+    const mid = cam.midPoint.clone();
+    cam.setZoom(zoom);
+    cam.centerOn(mid.x, mid.y);
+  }
+
+  private onPointerDown(p: Phaser.Input.Pointer) {
+    const pointers = [this.input.pointer1, this.input.pointer2].filter((q) => q?.isDown);
+    if (pointers.length === 2) {
+      this.pinch = Phaser.Math.Distance.Between(pointers[0].x, pointers[0].y, pointers[1].x, pointers[1].y);
+      this.drag = null;
+      return;
+    }
+    const cam = this.cameras.main;
+    this.drag = { x: p.x, y: p.y, scrollX: cam.scrollX, scrollY: cam.scrollY, moved: false };
+  }
+
+  private onPointerMove(p: Phaser.Input.Pointer) {
+    this.hover = this.tileAt(p.worldX, p.worldY);
+    const pointers = [this.input.pointer1, this.input.pointer2].filter((q) => q?.isDown);
+    if (this.pinch !== null && pointers.length === 2) {
+      const dist = Phaser.Math.Distance.Between(pointers[0].x, pointers[0].y, pointers[1].x, pointers[1].y);
+      this.setZoom(this.userZoom * (dist / this.pinch));
+      this.pinch = dist;
+      return;
+    }
+    if (!this.drag || !p.isDown) return;
+    const dx = p.x - this.drag.x;
+    const dy = p.y - this.drag.y;
+    if (!this.drag.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+    this.drag.moved = true;
+    const cam = this.cameras.main;
+    cam.setScroll(this.drag.scrollX - dx / cam.zoom, this.drag.scrollY - dy / cam.zoom);
+  }
+
+  private onPointerUp(p: Phaser.Input.Pointer) {
+    const wasPinch = this.pinch !== null;
+    if (wasPinch && !this.input.pointer1.isDown && !this.input.pointer2?.isDown) this.pinch = null;
+    const drag = this.drag;
+    this.drag = null;
+    if (wasPinch || drag?.moved) return;
+    this.onTap(p);
   }
 
   private tileAt(sx: number, sy: number): Point | null {
-    const p = screenToIso(sx, sy, this.origin);
+    const p = screenToIso(sx, sy, { x: 0, y: 0 });
     const tile = { x: Math.floor(p.x), y: Math.floor(p.y) };
-    return tile.x >= 0 && tile.y >= 0 && tile.x < GRID_W && tile.y < GRID_H ? tile : null;
+    const { w, h } = this.size;
+    return tile.x >= 0 && tile.y >= 0 && tile.x < w && tile.y < h ? tile : null;
   }
 
-  /** Los expositores sobresalen del suelo: se pueden tocar por su volumen, no solo por su casilla. */
-  private displayAt(sx: number, sy: number): Display | null {
-    const hits = this.controller.state.displays.filter((d) => {
-      const c = this.tileCenter(d.x, d.y);
-      const h = SHAPES[d.kind].height + 16;
-      return Math.abs(sx - c.x) < 28 && sy > c.y - h - TILE_H / 2 && sy < c.y + TILE_H / 2;
-    });
-    return hits.sort((a, b) => b.x + b.y - (a.x + a.y))[0] ?? null;
+  /** El mueble que hay bajo el puntero, contando su volumen y no solo su casilla. */
+  private furnitureAt(sx: number, sy: number): FurnitureRef | null {
+    const s = this.controller.state;
+    const hits: { ref: FurnitureRef; depth: number }[] = [];
+    const test = (kind: FurnitureKind, id: number, x: number, y: number, height: number) => {
+      const c = tileCenter(x, y);
+      if (Math.abs(sx - c.x) < 28 && sy > c.y - height - TILE_H / 2 && sy < c.y + TILE_H / 2) hits.push({ ref: { kind, id }, depth: x + y });
+    };
+    for (const d of s.displays) test('display', d.id, d.x, d.y, SHAPES[d.kind].top + 10);
+    for (const r of s.registers) test('register', r.id, r.x, r.y, 40);
+    for (const d of s.decor) test('decor', d.id, d.x, d.y, DECOR_3D_HEIGHT[d.decorId] ?? (DECOR_SIZE[d.decorId] ?? 34) * 0.8);
+    hits.sort((a, b) => b.depth - a.depth);
+    return hits[0]?.ref ?? null;
   }
 
   private onTap(p: Phaser.Input.Pointer) {
@@ -177,115 +335,156 @@ export class StoreScene extends Phaser.Scene {
       if (tile) c.tapTile(tile.x, tile.y);
       return;
     }
-    const display = this.displayAt(p.worldX, p.worldY);
-    c.selectDisplay(display ? display.id : null);
+    c.selectFurniture(this.furnitureAt(p.worldX, p.worldY));
+  }
+
+  private isSelected(kind: FurnitureKind, id: number) {
+    const panel = this.controller.panel;
+    const mode = this.controller.mode;
+    if (mode.type === 'move') return mode.ref.kind === kind && mode.ref.id === id;
+    return typeof panel === 'object' && panel !== null && panel.furniture.kind === kind && panel.furniture.id === id;
+  }
+
+  private isMoving(kind: FurnitureKind, id: number) {
+    const mode = this.controller.mode;
+    return mode.type === 'move' && mode.ref.kind === kind && mode.ref.id === id;
   }
 
   // -------------------------------------------------------------------------
-  // Utilidades de dibujo
-  // -------------------------------------------------------------------------
-
-  private at(x: number, y: number): Point {
-    return isoToScreen(x, y, this.origin);
-  }
-
-  private tileCenter(x: number, y: number): Point {
-    return this.at(x + 0.5, y + 0.5);
-  }
-
-  /** Caja isométrica sobre la casilla (x, y); devuelve las esquinas de la cara superior. */
-  private box(
-    g: Phaser.GameObjects.Graphics,
-    x: number,
-    y: number,
-    height: number,
-    color: number,
-    inset = 0.12,
-    lift = 0,
-    alpha = 1,
-  ): Point[] {
-    const raise = (p: Point, h: number) => ({ x: p.x, y: p.y - h });
-    const top = raise(this.at(x + inset, y + inset), lift);
-    const right = raise(this.at(x + 1 - inset, y + inset), lift);
-    const bottom = raise(this.at(x + 1 - inset, y + 1 - inset), lift);
-    const left = raise(this.at(x + inset, y + 1 - inset), lift);
-    g.fillStyle(shade(color, 0.8), alpha).fillPoints([left, bottom, raise(bottom, height), raise(left, height)], true);
-    g.fillStyle(shade(color, 0.62), alpha).fillPoints([bottom, right, raise(right, height), raise(bottom, height)], true);
-    const face = [top, right, bottom, left].map((p) => raise(p, height));
-    g.fillStyle(color, alpha).fillPoints(face, true);
-    return face;
-  }
-
-  private text(x: number, y: number, size: number, color = '#fff') {
-    return this.add
-      .text(x, y, '', { fontFamily: FONT, fontSize: `${size}px`, fontStyle: 'bold', color, resolution: TEXT_RESOLUTION })
-      .setOrigin(0.5, 1);
-  }
-
-  // -------------------------------------------------------------------------
-  // Tienda
+  // Suelo, paredes y vista previa
   // -------------------------------------------------------------------------
 
   private drawFloor() {
-    const g = this.floor;
-    g.clear();
-    const up = (p: Point, h: number) => ({ x: p.x, y: p.y - h });
-    const corner = this.at(0, 0);
-    const right = this.at(GRID_W, 0);
-    const left = this.at(0, GRID_H);
+    const g = this.floor.clear();
+    const s = this.controller.state;
+    const { w, h } = this.size;
+    const floor = FLOORS.find((f) => f.id === s.floor) ?? FLOORS[0];
+    const wall = WALLS.find((f) => f.id === s.wall) ?? WALLS[0];
+    const corner = at(0, 0);
+    const right = at(w, 0);
+    const left = at(0, h);
+    const up = raise;
 
     // Paredes del fondo con zócalo y ventanas.
-    g.fillStyle(0xf4e1c1).fillPoints([corner, right, up(right, WALL_HEIGHT), up(corner, WALL_HEIGHT)], true);
-    g.fillStyle(0xe8cfa6).fillPoints([corner, left, up(left, WALL_HEIGHT), up(corner, WALL_HEIGHT)], true);
+    g.fillStyle(wall.colors[1]).fillPoints([corner, right, up(right, WALL_HEIGHT), up(corner, WALL_HEIGHT)], true);
+    g.fillStyle(wall.colors[0]).fillPoints([corner, left, up(left, WALL_HEIGHT), up(corner, WALL_HEIGHT)], true);
+    if (s.wall === 'brick') this.drawBricks(g, w, h);
     g.fillStyle(0xb5835a).fillPoints([corner, right, up(right, 8), up(corner, 8)], true);
     g.fillStyle(0xa47148).fillPoints([corner, left, up(left, 8), up(corner, 8)], true);
-    for (const wx of [2, 6]) {
-      const a = this.at(wx, 0);
-      const b = this.at(wx + 1.6, 0);
-      g.fillStyle(0xbde0fe).fillPoints([up(a, 22), up(b, 22), up(b, 56), up(a, 56)], true);
-      g.lineStyle(3, 0xffffff).strokePoints([up(a, 22), up(b, 22), up(b, 56), up(a, 56)], true);
-    }
-    for (const wy of [2, 5]) {
-      const a = this.at(0, wy);
-      const b = this.at(0, wy + 1.6);
-      g.fillStyle(0xa2d2ff).fillPoints([up(a, 22), up(b, 22), up(b, 56), up(a, 56)], true);
-      g.lineStyle(3, 0xffffff).strokePoints([up(a, 22), up(b, 22), up(b, 56), up(a, 56)], true);
-    }
+    const windows = (n: number, along: (t: number) => Point, color: number) => {
+      for (let i = 0; i < n; i++) {
+        const t0 = (i + 0.5) * (1 / n) - 0.08;
+        const a = along(t0);
+        const b = along(t0 + 0.16);
+        const pts = [up(a, 22), up(b, 22), up(b, 56), up(a, 56)];
+        g.fillStyle(color).fillPoints(pts, true);
+        g.lineStyle(3, 0xffffff).strokePoints(pts, true);
+      }
+    };
+    windows(Math.round(w / 4), (t) => at(t * w, 0), 0xbde0fe);
+    windows(Math.round(h / 4), (t) => at(0, t * h), 0xa2d2ff);
     g.fillStyle(0x9c6644).fillRect(corner.x - 1, corner.y - WALL_HEIGHT, 2, WALL_HEIGHT);
 
-    // Suelo de madera, con la puerta y la casilla bajo el cursor resaltadas.
-    const c = this.controller;
-    const placing = c.mode.type !== 'idle';
-    for (let y = 0; y < GRID_H; y++) {
-      for (let x = 0; x < GRID_W; x++) {
-        let color = (x + y) % 2 === 0 ? 0xf6e7cb : 0xecd9b6;
-        if (x === GRID_W - 1 && y === GRID_H - 1) color = 0x95c48f;
-        if (placing && this.hover?.x === x && this.hover.y === y) {
-          color = isTileFree(c.state, x, y) ? 0x90ee90 : 0xf08080;
-        }
-        g.fillStyle(color).fillPoints([this.at(x, y), this.at(x + 1, y), this.at(x + 1, y + 1), this.at(x, y + 1)], true);
-      }
+    // Suelo con el estilo elegido; la puerta y los puestos de las cajas, marcados.
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) diamond(g, x, y, x + 1, y + 1, floor.colors[(x + y) % 2]);
     }
-    g.lineStyle(2, 0x9c6644).strokePoints([corner, right, this.at(GRID_W, GRID_H), left], true);
+    const door = doorTile(s);
+    diamond(g, door.x + 0.1, door.y + 0.1, door.x + 0.9, door.y + 0.9, 0x95c48f, 0.9);
+    for (const r of s.registers) {
+      const f = registerFront(r);
+      diamond(g, f.x + 0.2, f.y + 0.2, f.x + 0.8, f.y + 0.8, 0xffd166, 0.35);
+    }
+    if (this.controller.mode.type !== 'idle') {
+      // En modo construcción se ve la cuadrícula.
+      g.lineStyle(1, 0x000000, 0.08);
+      for (let x = 0; x <= w; x++) g.lineBetween(at(x, 0).x, at(x, 0).y, at(x, h).x, at(x, h).y);
+      for (let y = 0; y <= h; y++) g.lineBetween(at(0, y).x, at(0, y).y, at(w, y).x, at(w, y).y);
+    }
+    g.lineStyle(2, 0x9c6644).strokePoints([corner, right, at(w, h), left], true);
+    Street.drawFrontWalls(g, w, h, shade(wall.colors[0], 0.85));
   }
 
-  private createRegister() {
-    const g = this.add.graphics();
-    const bag = this.add.image(0, 0, 'ui:moneybag').setDisplaySize(30, 30).setOrigin(0.5, 0.9);
-    const container = this.add.container(0, 0, [g, bag]).setDepth(REGISTER.x + REGISTER.y);
-    this.register = { container, bag, bagScale: bag.scale };
-    // El origen de la cuadrícula es fijo (el zoom lo hace la cámara): basta con dibujarla una vez.
-    this.box(g, REGISTER.x, REGISTER.y, 26, 0x5c4033, 0.15);
-    this.box(g, REGISTER.x, REGISTER.y, 6, 0x343a40, 0.3, 26);
-    const c = this.tileCenter(REGISTER.x, REGISTER.y);
-    bag.setPosition(c.x + 6, c.y - 30);
+  private drawBricks(g: Phaser.GameObjects.Graphics, w: number, h: number) {
+    g.lineStyle(1, 0x8c4a2f, 0.35);
+    for (let row = 1; row < 7; row++) {
+      const hgt = row * 10;
+      g.lineBetween(at(0, 0).x, at(0, 0).y - hgt, at(w, 0).x, at(w, 0).y - hgt);
+      g.lineBetween(at(0, 0).x, at(0, 0).y - hgt, at(0, h).x, at(0, h).y - hgt);
+    }
   }
 
-  private syncDecor() {
+  /** Vista previa del mueble que se coloca o se mueve, en verde o rojo según se pueda. */
+  private drawGhost() {
+    const g = this.ghost.clear();
+    const ghost = this.ghostImage.setVisible(false);
+    const c = this.controller;
+    const m = c.mode;
+    const tile = this.hover;
+    if (m.type === 'idle' || !tile) return;
+
+    let kind: FurnitureKind;
+    let decorId: string | undefined;
+    let displayKind: DisplayKind | undefined;
+    let moving: FurnitureRef | undefined;
+    if (m.type === 'placeDisplay') [kind, displayKind] = ['display', m.kind];
+    else if (m.type === 'placeRegister') kind = 'register';
+    else if (m.type === 'placeDecor') [kind, decorId] = ['decor', m.decorId];
+    else {
+      moving = m.ref;
+      kind = m.ref.kind;
+      if (kind === 'display') displayKind = c.state.displays.find((d) => d.id === m.ref.id)?.kind;
+      if (kind === 'decor') decorId = c.state.decor.find((d) => d.id === m.ref.id)?.decorId;
+    }
+
+    const key = `${kind}|${decorId}|${moving?.id}|${tile.x},${tile.y}|${c.state.displays.length}|${c.state.decor.length}|${c.state.registers.length}`;
+    if (key !== this.placementCache.key) {
+      this.placementCache = { key, error: placementError(c.state, kind, tile.x, tile.y, { moving, decorId }) };
+    }
+    const valid = !this.placementCache.error;
+    diamond(g, tile.x, tile.y, tile.x + 1, tile.y + 1, valid ? 0x2a9d8f : 0xe63946, 0.4);
+    const p = tileCenter(tile.x, tile.y);
+    const tint = valid ? 0xffffff : 0xff8080;
+
+    if (kind === 'register') {
+      diamond(g, tile.x + 0.2, tile.y + 1.2, tile.x + 0.8, tile.y + 1.8, 0xffd166, 0.6);
+      ghost.setTexture('furn:register').setOrigin(0.5, FURNITURE_ORIGIN_Y).setDisplaySize(FURNITURE_SIZE, FURNITURE_SIZE);
+    } else if (kind === 'display' && displayKind) {
+      ghost.setTexture(`furn:${displayKind}`).setOrigin(0.5, FURNITURE_ORIGIN_Y).setDisplaySize(FURNITURE_SIZE, FURNITURE_SIZE);
+    } else if (decorId && FURNITURE_DECOR.has(decorId)) {
+      ghost.setTexture(`decor:${decorId}`).setOrigin(0.5, FURNITURE_ORIGIN_Y).setDisplaySize(FURNITURE_SIZE, FURNITURE_SIZE);
+    } else if (decorId) {
+      const size = DECOR_SIZE[decorId] ?? 34;
+      ghost.setTexture(`decor:${decorId}`).setOrigin(0.5, 1).setDisplaySize(size, size);
+      p.y += 4;
+    } else {
+      return;
+    }
+    ghost.setPosition(p.x, p.y).setTint(tint).setAlpha(0.7).setVisible(true);
+  }
+
+  // -------------------------------------------------------------------------
+  // Decoración
+  // -------------------------------------------------------------------------
+
+  private syncDecor(time: number) {
     const live = new Set<number>();
     for (const d of this.controller.state.decor) {
       live.add(d.id);
-      if (!this.decor.has(d.id)) this.decor.set(d.id, this.createDecor(d));
+      let view = this.decor.get(d.id);
+      if (view && (view.x !== d.x || view.y !== d.y)) {
+        view.container.destroy();
+        view = undefined;
+      }
+      view ??= this.createDecor(d);
+      const selected = this.isSelected('decor', d.id);
+      view.container.setAlpha(this.isMoving('decor', d.id) ? 0.35 : 1);
+      view.image.setTint(selected ? 0xfff3b0 : 0xffffff);
+      if (d.decorId === 'dog') {
+        // El perro da saltitos y mira a un lado y a otro.
+        const c = tileCenter(d.x, d.y);
+        view.image.setY(c.y + 4 - Math.abs(Math.sin(time / 260 + d.id)) * 4).setFlipX(Math.sin(time / 2300 + d.id) > 0);
+      }
     }
     for (const [id, v] of this.decor) {
       if (live.has(id)) continue;
@@ -296,21 +495,69 @@ export class StoreScene extends Phaser.Scene {
 
   private createDecor(d: PlacedDecor): DecorView {
     const g = this.add.graphics();
-    const c = this.tileCenter(d.x, d.y);
-    let image: Phaser.GameObjects.Image | null = null;
-    if (d.decorId === 'rug') {
-      this.box(g, d.x, d.y, 2, 0xc1121f, 0.05);
-      this.box(g, d.x, d.y, 0.5, 0xffd166, 0.2, 2);
+    const c = tileCenter(d.x, d.y);
+    let image: Phaser.GameObjects.Image;
+    if (FURNITURE_DECOR.has(d.decorId)) {
+      image = this.add.image(c.x, c.y, `decor:${d.decorId}`).setOrigin(0.5, FURNITURE_ORIGIN_Y).setDisplaySize(FURNITURE_SIZE, FURNITURE_SIZE);
     } else {
       const size = DECOR_SIZE[d.decorId] ?? 34;
       g.fillStyle(0x000000, 0.15).fillEllipse(c.x, c.y, size * 0.8, size * 0.3);
       image = this.add.image(c.x, c.y + 4, `decor:${d.decorId}`).setDisplaySize(size, size).setOrigin(0.5, 1);
     }
-    const children = image ? [g, image] : [g];
+    this.tweens.add({ targets: image, scale: { from: 0, to: image.scale }, duration: 350, ease: 'Back.easeOut' });
     // La alfombra es plana: siempre por debajo de muebles y clientes.
-    const container = this.add.container(0, 0, children).setDepth(d.decorId === 'rug' ? -0.5 : d.x + d.y);
-    if (image) this.tweens.add({ targets: image, scale: { from: 0, to: image.scale }, duration: 350, ease: 'Back.easeOut' });
-    return { container, g, image };
+    const container = this.add.container(0, 0, [g, image]).setDepth(d.decorId === 'rug' ? -1 : d.x + d.y);
+    const view = { container, g, image, x: d.x, y: d.y };
+    this.decor.set(d.id, view);
+    return view;
+  }
+
+  // -------------------------------------------------------------------------
+  // Cajas registradoras
+  // -------------------------------------------------------------------------
+
+  private syncRegisters(time: number) {
+    const live = new Set<number>();
+    for (const r of this.controller.state.registers) {
+      live.add(r.id);
+      const view = this.registers.get(r.id) ?? this.createRegister(r);
+      this.updateRegister(view, r, time);
+    }
+    for (const [id, v] of this.registers) {
+      if (live.has(id)) continue;
+      v.container.destroy();
+      this.registers.delete(id);
+    }
+  }
+
+  private createRegister(r: Register): RegisterView {
+    const g = this.add.graphics();
+    // Cada caja tiene su cajero, elegido según su id para que no cambie al recargar.
+    const staff = STAFF[(r.id * 7) % STAFF.length];
+    const cashier = this.add.image(0, 0, `staff:${staff}-idle`).setOrigin(0.5, 0.95);
+    const body = this.add.image(0, 0, 'furn:register').setOrigin(0.5, FURNITURE_ORIGIN_Y).setDisplaySize(FURNITURE_SIZE, FURNITURE_SIZE);
+    const container = this.add.container(0, 0, [g, cashier, body]);
+    const view = { container, g, body, cashier, staff };
+    this.registers.set(r.id, view);
+    return view;
+  }
+
+  private updateRegister(v: RegisterView, r: Register, time: number) {
+    const selected = this.isSelected('register', r.id);
+    v.container.setDepth(r.x + r.y).setAlpha(this.isMoving('register', r.id) ? 0.35 : 1);
+    v.g.clear();
+    if (selected) diamond(v.g, r.x, r.y, r.x + 1, r.y + 1, 0xffd166, 0.6);
+    const c = tileCenter(r.x, r.y);
+    v.body.setPosition(c.x, c.y).setTint(selected ? 0xfff3b0 : 0xffffff);
+    // El cajero está detrás del mostrador; al cobrar levanta la mano y da un saltito.
+    const serving = r.serveTimer > 0;
+    const key = `staff:${v.staff}-${serving ? 'serve' : 'idle'}`;
+    if (v.cashier.texture.key !== key) v.cashier.setTexture(key);
+    const scale = 44 / v.cashier.width;
+    const back = at(r.x + 0.5, r.y + 0.08);
+    v.cashier
+      .setPosition(back.x, back.y - (serving ? Math.abs(Math.sin(time / 110)) * 2 : 0))
+      .setScale(scale, scale * (1 + Math.sin(time / 400 + r.id) * 0.015));
   }
 
   // -------------------------------------------------------------------------
@@ -334,80 +581,80 @@ export class StoreScene extends Phaser.Scene {
   private createDisplay(d: Display): DisplayView {
     const shape = SHAPES[d.kind];
     const base = this.add.graphics();
-    const glass = this.add.graphics();
+    const body = this.add.image(0, 0, `furn:${d.kind}`).setOrigin(0.5, FURNITURE_ORIGIN_Y).setDisplaySize(FURNITURE_SIZE, FURNITURE_SIZE);
     const products = shape.slots.map(() => this.add.image(0, 0, 'ui:package').setVisible(false));
+    // Vitrinas, neveras y mostradores tienen el cristal en otra capa, por encima de los productos.
+    const glass = shape.glass
+      ? this.add.image(0, 0, `furn:${shape.glass}`).setOrigin(0.5, FURNITURE_ORIGIN_Y).setDisplaySize(FURNITURE_SIZE, FURNITURE_SIZE)
+      : null;
     const truck = this.add.image(0, 0, 'ui:truck').setDisplaySize(18, 18).setVisible(false);
-    const label = this.text(0, 0, 11).setPadding(5, 2, 5, 2);
-    const container = this.add.container(0, 0, [base, ...products, glass, truck, label]).setDepth(d.x + d.y);
-    const view: DisplayView = { container, base, products, glass, truck, label, labelKey: '', shown: 0 };
+    const fire = this.add.image(0, 0, 'ui:fire').setDisplaySize(16, 16).setVisible(false);
+    const label = this.add
+      .text(0, 0, '', { fontFamily: FONT, fontSize: '11px', fontStyle: 'bold', color: '#fff', resolution: TEXT_RESOLUTION })
+      .setOrigin(0.5, 1)
+      .setPadding(5, 2, 5, 2);
+    const layers = [base, body, ...products, ...(glass ? [glass] : []), truck, fire, label];
+    const container = this.add.container(0, 0, layers);
+    const view: DisplayView = { container, base, body, products, glass, truck, fire, label, labelKey: '', shown: 0, itemId: null };
     this.displays.set(d.id, view);
     this.tweens.add({ targets: container, alpha: { from: 0, to: 1 }, duration: 300 });
     return view;
   }
 
   private updateDisplay(v: DisplayView, d: Display) {
-    const def = DISPLAYS[d.kind];
+    const s = this.controller.state;
     const shape = SHAPES[d.kind];
-    const c = this.tileCenter(d.x, d.y);
-    const panel = this.controller.panel;
-    const selected = typeof panel === 'object' && panel?.displayId === d.id;
+    const c = tileCenter(d.x, d.y);
+    v.container.setDepth(d.x + d.y).setAlpha(this.isMoving('display', d.id) ? 0.35 : 1);
 
     v.base.clear();
-    v.glass.clear();
-    let topFace: Point[];
-    if (d.kind === 'rack') topFace = this.drawRack(v.base, d.x, d.y, def.color);
-    else if (d.kind === 'case') {
-      topFace = this.box(v.base, d.x, d.y, shape.height, def.color, 0.14);
-      // Cristal semitransparente por encima de los productos.
-      this.box(v.glass, d.x, d.y, 20, 0xdff6ff, 0.16, shape.height, 0.28);
-    } else if (d.kind === 'table') {
-      topFace = this.box(v.base, d.x, d.y, shape.height, def.color, 0.08);
-    } else {
-      topFace = this.box(v.base, d.x, d.y, shape.height, def.color, 0.14);
-      // Baldas en la cara frontal de la estantería.
-      for (const h of [10, 20]) {
-        const a = this.at(d.x + 0.14, d.y + 0.86);
-        const b = this.at(d.x + 0.86, d.y + 0.86);
-        v.base.lineStyle(2, shade(def.color, 0.55)).lineBetween(a.x, a.y - h, b.x, b.y - h);
-      }
-    }
-    if (selected) v.base.lineStyle(3, 0xffd166).strokePoints(topFace, true);
+    const selected = this.isSelected('display', d.id);
+    if (selected) diamond(v.base, d.x, d.y, d.x + 1, d.y + 1, 0xffd166, 0.6);
+    v.body.setPosition(c.x, c.y).setTint(selected ? 0xfff3b0 : 0xffffff);
+    v.glass?.setPosition(c.x, c.y);
 
     // Productos: uno visible por cada fracción de la capacidad, para que se vea cómo se vacía.
-    const count = d.stock <= 0 || !d.itemId ? 0 : Math.max(1, Math.ceil((d.stock / def.capacity) * shape.slots.length));
+    const cap = capacity(s, d.kind);
+    const count = d.stock <= 0 || !d.itemId ? 0 : Math.max(1, Math.ceil((d.stock / cap) * shape.slots.length));
+    if (d.itemId !== v.itemId) v.shown = 0;
+    v.itemId = d.itemId;
     v.products.forEach((img, i) => {
       const visible = i < count;
       if (visible && d.itemId) {
         const slot = shape.slots[i];
-        const p = this.at(d.x + slot.x, d.y + slot.y);
-        const lift = d.kind === 'rack' ? shape.height - 4 : shape.height;
-        img.setTexture(`item:${d.itemId}`).setPosition(p.x, p.y - lift);
-        img.setOrigin(0.5, d.kind === 'rack' ? 0.1 : 0.85);
+        const p = at(d.x + slot.x, d.y + slot.y);
+        const lift = slot.h ?? (d.kind === 'rack' ? shape.height - 2 : shape.height);
+        img.setTexture(`item:${d.itemId}`).setPosition(p.x, p.y - lift).setOrigin(0.5, d.kind === 'rack' ? 0.1 : 0.85);
         if (i >= v.shown) {
           // Recién repuesto: aparece con un pequeño salto, escalonado.
           img.setDisplaySize(shape.productSize, shape.productSize);
-          const scale = img.scale;
-          this.tweens.add({ targets: img, scale: { from: 0, to: scale }, duration: 300, delay: (i - v.shown) * 70, ease: 'Back.easeOut' });
+          this.tweens.add({ targets: img, scale: { from: 0, to: img.scale }, duration: 300, delay: (i - v.shown) * 70, ease: 'Back.easeOut' });
         }
       }
       img.setVisible(visible);
     });
     v.shown = count;
 
-    // Etiqueta: stock, pedido en camino o vacío.
-    const labelY = c.y - shape.height - 30;
+    // Etiqueta: stock, pedido en camino (con barra de progreso) o vacío.
+    const labelY = c.y - shape.top - 14;
+    const trending = s.trend?.kind === d.kind;
     v.truck.setVisible(!!d.order);
     if (d.order) {
-      this.setLabel(v, formatTime(d.order.readyAt - this.controller.state.time), '#1d3557');
+      this.setLabel(v, formatTime(d.order.readyAt - s.time), '#1d3557');
       v.label.setPosition(c.x + 9, labelY);
       v.truck.setPosition(c.x - v.label.width / 2 - 2, labelY - 9);
+      const progress = Phaser.Math.Clamp(1 - (d.order.readyAt - s.time) / d.order.totalMs, 0, 1);
+      v.base.fillStyle(0x000000, 0.35).fillRect(c.x - 20, labelY + 2, 40, 4);
+      v.base.fillStyle(0x4d96ff).fillRect(c.x - 20, labelY + 2, 40 * progress, 4);
     } else if (d.stock === 0) {
       this.setLabel(v, '¡Vacío!', '#c1121f');
       v.label.setPosition(c.x, labelY);
     } else {
-      this.setLabel(v, `${available(d)}`, '#2d6a4f');
+      const left = available(d);
+      this.setLabel(v, `${left}`, left <= 2 ? '#e76f51' : '#2d6a4f');
       v.label.setPosition(c.x, labelY);
     }
+    v.fire.setVisible(trending).setPosition(c.x + v.label.width / 2 + (d.order ? 18 : 9), labelY - 9);
   }
 
   /** Cambiar el fondo de un texto lo vuelve a rasterizar: solo lo hacemos si cambia. */
@@ -416,19 +663,6 @@ export class StoreScene extends Phaser.Scene {
     if (key === v.labelKey) return;
     v.labelKey = key;
     v.label.setText(text).setBackgroundColor(bg);
-  }
-
-  /** Perchero: peana, dos postes y una barra de la que cuelga la ropa. */
-  private drawRack(g: Phaser.GameObjects.Graphics, x: number, y: number, color: number): Point[] {
-    const top = this.box(g, x, y, 4, shade(color, 0.9), 0.15);
-    const h = SHAPES.rack.height;
-    const a = this.at(x + 0.18, y + 0.5);
-    const b = this.at(x + 0.82, y + 0.5);
-    g.lineStyle(3, 0x6c757d);
-    g.lineBetween(a.x, a.y - 4, a.x, a.y - h);
-    g.lineBetween(b.x, b.y - 4, b.x, b.y - h);
-    g.lineStyle(3, 0xadb5bd).lineBetween(a.x, a.y - h, b.x, b.y - h);
-    return top;
   }
 
   // -------------------------------------------------------------------------
@@ -455,28 +689,29 @@ export class StoreScene extends Phaser.Scene {
     const body = this.add.image(0, 0, `person:${person}-walking`).setOrigin(0.5, 0.96);
     body.setDisplaySize(PERSON_SIZE, PERSON_SIZE);
     const bag = this.add.image(0, 0, 'ui:bags').setDisplaySize(18, 18).setOrigin(0.5, 1).setVisible(false);
+    const crown = this.add.image(0, 0, 'ui:crown').setDisplaySize(18, 18).setVisible(c.vip);
     const bubble = this.add.graphics();
     const bubbleIcon = this.add.image(0, 0, 'ui:question').setDisplaySize(16, 16).setVisible(false);
-    const container = this.add.container(0, 0, [shadow, body, bag, bubble, bubbleIcon]);
-    const view: CustomerView = { container, shadow, body, bag, bubble, bubbleIcon, person, stride: 0, flip: false, last: { x: c.x, y: c.y } };
+    const container = this.add.container(0, 0, [shadow, body, bag, crown, bubble, bubbleIcon]);
+    const view: CustomerView = { container, shadow, body, bag, crown, bubble, bubbleIcon, person, stride: 0, flip: false, last: { x: c.x, y: c.y } };
     this.customers.set(c.id, view);
     return view;
   }
 
   private updateCustomer(v: CustomerView, c: Customer, time: number) {
-    const p = this.at(c.x + 0.5, c.y + 0.5);
-    const prev = this.at(v.last.x + 0.5, v.last.y + 0.5);
+    const s = this.controller.state;
+    const p = tileCenter(c.x, c.y);
+    const prev = tileCenter(v.last.x, v.last.y);
     const moved = Math.hypot(p.x - prev.x, p.y - prev.y);
     const walking = moved > 0.05;
     v.last = { x: c.x, y: c.y };
 
-    // El sprite caminando mira a la izquierda: lo volteamos al ir hacia la derecha.
+    // Los sprites caminando miran a la izquierda: los volteamos al ir hacia la derecha.
     if (walking && Math.abs(p.x - prev.x) > 0.05) v.flip = p.x > prev.x;
     v.stride += moved * 0.22;
 
-    const pose = walking ? 'walking' : 'standing';
-    const key = `person:${v.person}-${pose}`;
-    if (v.body.texture.key !== key) v.body.setTexture(key).setDisplaySize(PERSON_SIZE, PERSON_SIZE);
+    const key = `person:${v.person}-${walking ? 'walking' : 'standing'}`;
+    if (v.body.texture.key !== key) v.body.setTexture(key);
     const base = PERSON_SIZE / v.body.width;
     const bob = walking ? Math.abs(Math.sin(v.stride)) * 3 : 0;
     const breathe = walking ? 1 : 1 + Math.sin(time / 350 + c.id) * 0.02;
@@ -486,22 +721,27 @@ export class StoreScene extends Phaser.Scene {
       .setAngle(walking ? Math.sin(v.stride) * 4 : 0)
       .setScale(base, base * breathe);
 
-    v.shadow.clear().fillStyle(0x000000, 0.2).fillEllipse(p.x, p.y, 22 - bob * 1.5, 8);
+    v.shadow.clear();
+    if (c.vip) v.shadow.fillStyle(0xffd60a, 0.35).fillEllipse(p.x, p.y, 34, 13);
+    v.shadow.fillStyle(0x000000, 0.2).fillEllipse(p.x, p.y, 22 - bob * 1.5, 8);
+    v.crown.setPosition(p.x, p.y - PERSON_SIZE - 2 - bob);
 
-    // Entran y salen difuminándose en la puerta.
-    const fromDoor = Math.hypot(c.x - ENTRANCE.x, c.y - ENTRANCE.y);
-    v.container.setAlpha(Phaser.Math.Clamp(fromDoor / 0.7, 0, 1)).setDepth(c.x + c.y + 0.6);
+    // Entran y salen difuminándose por los extremos de la acera.
+    const { w } = this.size;
+    const fromEdge = Math.min(c.x + 2, w + 1 - c.x);
+    const fadeIn = Math.min(1, c.age / ENTRANCE_FADE);
+    v.container.setAlpha(Phaser.Math.Clamp(Math.min(fromEdge / 0.8, fadeIn), 0, 1)).setDepth(c.x + c.y + 0.6);
 
     v.bag.setVisible(c.carrying).setPosition(p.x + (v.flip ? 12 : -12), p.y - 6 - bob);
 
     // Bocadillo: lo que busca, o una interrogación si no lo encuentra.
-    const lostHere = c.state === 'lost' && c.x === c.tx && c.y === c.ty;
+    const lostHere = c.state === 'lost' && c.path.length === 0 && c.y < sidewalkY(s) - 0.5;
     const thinking = c.state === 'toDisplay' || lostHere;
     v.bubble.clear();
     v.bubbleIcon.setVisible(thinking);
     if (thinking) {
       const bx = p.x + 14;
-      const by = p.y - PERSON_SIZE - 10 + Math.sin(time / 250 + c.id) * 1.5;
+      const by = p.y - PERSON_SIZE - (c.vip ? 22 : 10) + Math.sin(time / 250 + c.id) * 1.5;
       v.bubble.fillStyle(0xffffff, 0.95).fillCircle(bx, by, 13).fillCircle(bx - 9, by + 13, 3).fillCircle(bx - 13, by + 18, 2);
       v.bubble.lineStyle(1, 0x000000, 0.15).strokeCircle(bx, by, 13);
       v.bubbleIcon.setTexture(lostHere ? 'ui:question' : `item:${c.itemId}`).setDisplaySize(18, 18).setPosition(bx, by);
@@ -513,118 +753,44 @@ export class StoreScene extends Phaser.Scene {
   // -------------------------------------------------------------------------
 
   private playEvent(e: SimEvent) {
+    const s = this.controller.state;
     switch (e.type) {
-      case 'pickup':
-        this.fxPickup(e.displayId, e.customerId, e.itemId);
-        break;
-      case 'sale':
-        this.fxSale(e.amount);
-        break;
-      case 'delivered':
-        this.fxDelivered(e.displayId);
-        break;
-      case 'unhappy':
-        this.fxPopIcon(this.at(e.x + 0.5, e.y + 0.5), 'ui:angry', 26);
-        break;
-      case 'levelUp': {
-        const c = this.tileCenter(REGISTER.x, REGISTER.y);
-        for (let i = 0; i < 6; i++) this.fxPopIcon({ x: c.x + (i - 2.5) * 22, y: c.y - 20 }, i % 2 ? 'ui:star' : 'ui:sparkles', 28, i * 80);
-        break;
+      case 'pickup': {
+        const d = s.displays.find((x) => x.id === e.displayId);
+        const c = s.customers.find((x) => x.id === e.customerId);
+        if (!d || !c) return;
+        const from = tileCenter(d.x, d.y);
+        const to = tileCenter(c.x, c.y);
+        this.fx.flyItem({ x: from.x, y: from.y - SHAPES[d.kind].top }, { x: to.x, y: to.y - 20 }, `item:${e.itemId}`);
+        return;
       }
+      case 'sale': {
+        const r = s.registers.find((x) => x.id === e.registerId);
+        if (!r) return;
+        const c = tileCenter(r.x, r.y);
+        this.fx.sale({ x: c.x, y: c.y - 40 }, e.amount, e.tip, e.gem, e.vip);
+        return;
+      }
+      case 'delivered': {
+        const d = s.displays.find((x) => x.id === e.displayId);
+        if (!d) return;
+        const c = tileCenter(d.x, d.y);
+        this.fx.delivered({ x: c.x, y: c.y - SHAPES[d.kind].top });
+        this.street.deliveryTruck();
+        return;
+      }
+      case 'unhappy': {
+        this.fx.popIcon(tileCenter(e.x, e.y), 'ui:angry', 26);
+        return;
+      }
+      case 'vipArrived': {
+        const { w } = this.size;
+        this.fx.popIcon(tileCenter(w - 1, sidewalkY(s)), 'ui:crown', 30);
+        return;
+      }
+      case 'levelUp':
+        this.fx.confetti();
+        return;
     }
-  }
-
-  /** El producto vuela del expositor a las manos del cliente. */
-  private fxPickup(displayId: number, customerId: number, itemId: string) {
-    const d = this.controller.state.displays.find((x) => x.id === displayId);
-    const c = this.controller.state.customers.find((x) => x.id === customerId);
-    if (!d || !c) return;
-    const from = this.tileCenter(d.x, d.y);
-    const to = this.at(c.x + 0.5, c.y + 0.5);
-    const img = this.add.image(from.x, from.y - SHAPES[d.kind].height - 8, `item:${itemId}`).setDisplaySize(22, 22).setDepth(FX_DEPTH);
-    const scale = img.scale;
-    this.tweens.add({ targets: img, x: to.x, duration: 450, ease: 'Sine.easeInOut' });
-    this.tweens.add({ targets: img, y: img.y - 26, duration: 200, ease: 'Quad.easeOut' });
-    this.tweens.add({
-      targets: img,
-      y: to.y - 20,
-      scale: scale * 0.6,
-      delay: 200,
-      duration: 250,
-      ease: 'Quad.easeIn',
-      onComplete: () => img.destroy(),
-    });
-  }
-
-  /** Monedas que saltan de la caja y el saco que se infla. */
-  private fxSale(amount: number) {
-    const c = this.tileCenter(REGISTER.x, REGISTER.y);
-    const { bag, bagScale } = this.register;
-    this.tweens.killTweensOf(bag);
-    this.tweens.add({ targets: bag, scale: { from: bagScale, to: bagScale * 1.3 }, duration: 120, yoyo: true, ease: 'Quad.easeOut' });
-
-    const coins = Math.min(5, 1 + Math.floor(amount / 10));
-    for (let i = 0; i < coins; i++) {
-      const coin = this.add.image(c.x, c.y - 34, 'ui:coin').setDisplaySize(16, 16).setDepth(FX_DEPTH);
-      const dx = Phaser.Math.Between(-28, 28);
-      this.tweens.add({ targets: coin, x: c.x + dx, duration: 650, delay: i * 50 });
-      this.tweens.add({
-        targets: coin,
-        y: { from: c.y - 34, to: c.y - 70 - Phaser.Math.Between(0, 20) },
-        alpha: { from: 1, to: 0 },
-        angle: Phaser.Math.Between(-180, 180),
-        duration: 650,
-        delay: i * 50,
-        ease: 'Quad.easeOut',
-        onComplete: () => coin.destroy(),
-      });
-    }
-    const t = this.add
-      .text(c.x, c.y - 60, `+${amount}`, {
-        fontFamily: FONT,
-        fontSize: '16px',
-        fontStyle: 'bold',
-        color: '#ffd166',
-        stroke: '#5c4033',
-        strokeThickness: 4,
-        resolution: TEXT_RESOLUTION,
-      })
-      .setOrigin(0.5)
-      .setDepth(FX_DEPTH);
-    this.tweens.add({ targets: t, y: t.y - 36, alpha: 0, duration: 1100, ease: 'Quad.easeOut', onComplete: () => t.destroy() });
-  }
-
-  /** Una caja cae sobre el expositor y rebota. */
-  private fxDelivered(displayId: number) {
-    const d = this.controller.state.displays.find((x) => x.id === displayId);
-    if (!d) return;
-    const c = this.tileCenter(d.x, d.y);
-    const landY = c.y - SHAPES[d.kind].height - 4;
-    const box = this.add.image(c.x, landY - 120, 'ui:package').setDisplaySize(30, 30).setOrigin(0.5, 1).setDepth(FX_DEPTH);
-    this.tweens.add({
-      targets: box,
-      y: landY,
-      duration: 600,
-      ease: 'Bounce.easeOut',
-      onComplete: () => {
-        this.fxPopIcon({ x: c.x, y: landY - 10 }, 'ui:sparkles', 30);
-        this.tweens.add({ targets: box, alpha: 0, duration: 250, onComplete: () => box.destroy() });
-      },
-    });
-  }
-
-  private fxPopIcon(p: Point, key: string, size: number, delay = 0) {
-    const img = this.add.image(p.x, p.y - 40, key).setDisplaySize(size, size).setDepth(FX_DEPTH).setAlpha(0);
-    const scale = img.scale;
-    this.tweens.add({
-      targets: img,
-      alpha: { from: 1, to: 0 },
-      y: p.y - 80,
-      scale: { from: scale * 0.4, to: scale * 1.1 },
-      duration: 1000,
-      delay,
-      ease: 'Quad.easeOut',
-      onComplete: () => img.destroy(),
-    });
   }
 }

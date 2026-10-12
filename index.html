@@ -3,8 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="theme-color" content="#e76f51" />
     <title>Market Street</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏪</text></svg>" />
+    <link rel="icon" href="sprites/ui/store.png" />
   </head>
   <body>
     <div id="game"></div>
@@ -12,10 +13,13 @@
     <div id="placing" hidden></div>
     <aside id="panel" hidden></aside>
     <nav id="toolbar">
-      <button data-tool="build"><img src="sprites/ui/build.png" alt=""><span>Expositores</span></button>
-      <button data-tool="decor"><img src="sprites/decor/plant.png" alt=""><span>Decoración</span></button>
-      <button data-tool="help"><img src="sprites/ui/question.png" alt=""><span>Ayuda</span></button>
+      <button data-tool="build"><img src="sprites/ui/build.png" alt="" /><span>Construir</span></button>
+      <button data-tool="decor"><img src="sprites/decor/plant.png" alt="" /><span>Decorar</span></button>
+      <button data-tool="tasks"><img src="sprites/ui/clipboard.png" alt="" /><span>Tareas</span><b id="tasks-badge" class="badge" hidden></b></button>
+      <button data-tool="upgrades"><img src="sprites/ui/chart.png" alt="" /><span>Mejoras</span></button>
+      <button data-tool="help"><img src="sprites/ui/question.png" alt="" /><span>Ayuda</span></button>
     </nav>
+    <div id="modal" hidden></div>
     <div id="toasts"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

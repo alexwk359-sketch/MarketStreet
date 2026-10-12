@@ -5,14 +5,16 @@ import { mountUi } from './game/ui';
 import { loadGame } from './sim/save';
 import './style.css';
 
-const controller = new Controller(loadGame(Date.now()));
+const { state, offline } = loadGame(Date.now(), Math.random);
+const controller = new Controller(state, offline);
 mountUi(controller);
 
 const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: 'game',
-  backgroundColor: '#3d5a80',
+  backgroundColor: '#8ecae6',
   scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' },
+  render: { antialias: true, mipmapFilter: 'LINEAR_MIPMAP_LINEAR' },
   banner: false,
 });
 game.scene.add('store', StoreScene, true, { controller });
