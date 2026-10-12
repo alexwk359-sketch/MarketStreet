@@ -187,17 +187,7 @@ SPRITES = {
     "ui/palette": "Artist palette",
 }
 
-# Cajeros: atendiendo (mano extendida) y cobrando (mano levantada), 3 figuras x 4 tonos.
-for figure in ("Person", "Woman", "Man"):
-    for tone in ("Default", "Light", "Medium", "Dark"):
-        SPRITES[f"staff/{figure.lower()}-{tone.lower()}-idle"] = (f"{figure} tipping hand", tone)
-        SPRITES[f"staff/{figure.lower()}-{tone.lower()}-serve"] = (f"{figure} raising hand", tone)
-
-# Clientes: 3 figuras x 4 tonos de piel, caminando y de pie.
-for figure in ("Person", "Woman", "Man"):
-    for tone in ("Default", "Light", "Medium", "Dark"):
-        for pose in ("walking", "standing"):
-            SPRITES[f"people/{figure.lower()}-{tone.lower()}-{pose}"] = (f"{figure} {pose}", tone)
+# Clientes y cajeros ya no vienen de aquí: se modelan en 3D (scripts/furniture/characters.js).
 
 
 def url_for(spec):

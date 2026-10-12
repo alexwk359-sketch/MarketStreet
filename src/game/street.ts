@@ -2,10 +2,10 @@
 // Es pura ambientación: no forma parte de la simulación.
 import Phaser from 'phaser';
 import { at, box, diamond, FONT, raise, TEXT_RESOLUTION, tileCenter } from './draw';
-import { PEOPLE, STREET_VEHICLES } from './sprites';
+import { CUSTOMER_VARIANTS, STREET_VEHICLES } from './sprites';
 
 interface Walker {
-  sprite: Phaser.GameObjects.Image;
+  sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
   x: number;
   y: number;
   speed: number;
@@ -119,11 +119,18 @@ export class Street {
       ? this.h + (dir > 0 ? ROAD_FROM + 0.5 : ROAD_TO - 0.5)
       : this.h + 0.65 + Math.random() * 0.35;
     const x = dir > 0 ? -EXTRA : this.w + EXTRA;
-    const key = texture ?? (vehicle ? `street:${Phaser.Utils.Array.GetRandom(STREET_VEHICLES)}` : `person:${Phaser.Utils.Array.GetRandom(PEOPLE)}-walking`);
-    const size = vehicle ? 54 : 42;
-    const sprite = this.scene.add.image(0, 0, key).setOrigin(0.5, 0.92).setDisplaySize(size, size).setAlpha(0);
-    // Los sprites miran a la izquierda: al ir hacia +x (abajo a la derecha) se voltean.
-    sprite.setFlipX(dir > 0);
+    let sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
+    if (vehicle) {
+      const key = texture ?? `street:${Phaser.Utils.Array.GetRandom(STREET_VEHICLES)}`;
+      // Los vehículos de Fluent miran a la izquierda: al ir hacia +x (abajo a la derecha) se voltean.
+      sprite = this.scene.add.image(0, 0, key).setOrigin(0.5, 0.92).setDisplaySize(54, 54).setFlipX(dir > 0);
+    } else {
+      // Peatones: hacia +x caminan de frente; hacia -x, de espaldas y volteados.
+      const variant = Phaser.Math.Between(0, CUSTOMER_VARIANTS - 1);
+      sprite = this.scene.add.sprite(0, 0, `cust:${variant}`).setOrigin(0.5, 0.9).setScale(0.5).setFlipX(dir < 0);
+      (sprite as Phaser.GameObjects.Sprite).play(`cust:${variant}:walk-${dir > 0 ? 'front' : 'back'}`);
+    }
+    sprite.setAlpha(0);
     const speed = (vehicle ? 3 + Math.random() * 2 : 0.8 + Math.random() * 0.5) * dir;
     this.walkers.push({ sprite, x, y, speed, stride: 0, until: stopAtDoor ? 0 : -1, vehicle, stopX: stopAtDoor ? this.w - 1 : undefined });
   }
@@ -138,9 +145,9 @@ export class Street {
       w.stride += Math.abs(w.speed) * dt * 9;
     }
     const p = tileCenter(w.x, w.y);
-    const bob = w.vehicle ? Math.abs(Math.sin(w.stride * 0.6)) * 0.8 : Math.abs(Math.sin(w.stride)) * 2.5;
+    // Los coches traquetean un poco; los peatones ya tienen su animación de caminar.
+    const bob = w.vehicle ? Math.abs(Math.sin(w.stride * 0.6)) * 0.8 : 0;
     w.sprite.setPosition(p.x, p.y - bob).setDepth(w.x + w.y + 0.5);
-    if (!w.vehicle) w.sprite.setAngle(Math.sin(w.stride) * 3);
     // Aparecen y desaparecen en los extremos de la calle.
     const edge = Math.min(w.x + EXTRA, this.w + EXTRA - w.x);
     w.sprite.setAlpha(Phaser.Math.Clamp(edge / 1.2, 0, 1));

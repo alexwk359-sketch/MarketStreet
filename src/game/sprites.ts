@@ -1,7 +1,8 @@
 import { FURNITURE_DECOR } from '../sim/catalog';
 
-// Rutas y claves de los sprites de public/sprites/ (Microsoft Fluent Emoji 3D, MIT).
-// Se descargan con scripts/fetch_assets.py.
+// Rutas y claves de los sprites de public/sprites/. Los productos, iconos y vehículos son
+// Microsoft Fluent Emoji 3D (MIT, scripts/fetch_assets.py); muebles, quesos y personajes
+// se modelan en 3D para el juego (scripts/render_furniture.mjs).
 
 export const SPRITE_BASE = 'sprites/';
 
@@ -18,19 +19,21 @@ export const UI_SPRITES = [
 ] as const;
 export type UiSprite = (typeof UI_SPRITES)[number];
 
-const FIGURES = ['person', 'woman', 'man'];
-const TONES = ['default', 'light', 'medium', 'dark'];
-/** Las 12 combinaciones de figura y tono de piel; cada una tiene sprite caminando y de pie. */
-export const PEOPLE = FIGURES.flatMap((f) => TONES.map((t) => `${f}-${t}`));
-export const personSprite = (person: string, pose: 'walking' | 'standing') => `${SPRITE_BASE}people/${person}-${pose}.png`;
+/**
+ * Personajes 3D propios (scripts/furniture/characters.js), en hojas de 80×120 px por fotograma.
+ * Clientes: fila 0 de frente, fila 1 de espaldas; columnas 0-7 caminar, 8 quieto, 9 alcanzar.
+ * Cajeros: una fila; 0-1 reposo, 2-4 escanear, 5-6 saludar.
+ */
+export const CUSTOMER_VARIANTS = 24;
+export const CASHIER_VARIANTS = 6;
+export const CHARACTER_FRAME = { frameWidth: 80, frameHeight: 120 };
+export const CUSTOMER_COLUMNS = 10;
+export const customerSheet = (i: number) => `${SPRITE_BASE}people/customer-${i}.png`;
+export const cashierSheet = (i: number) => `${SPRITE_BASE}people/cashier-${i}.png`;
 
 export const STREET_SPRITES = ['tree', 'pine', 'car', 'taxi', 'bus', 'suv', 'moto'] as const;
 export const STREET_VEHICLES = ['car', 'taxi', 'bus', 'suv', 'moto'];
 export const streetSprite = (name: string) => `${SPRITE_BASE}street/${name}.png`;
-
-/** Cajeros: 3 figuras x 4 tonos, atendiendo (idle) o cobrando (serve). */
-export const STAFF = FIGURES.flatMap((f) => TONES.map((t) => `${f}-${t}`));
-export const staffSprite = (name: string, pose: 'idle' | 'serve') => `${SPRITE_BASE}staff/${name}-${pose}.png`;
 
 /** Muebles renderizados en 3D con scripts/render_furniture.mjs (256 px = 2 casillas de ancho). */
 export const FURNITURE_SPRITES = [

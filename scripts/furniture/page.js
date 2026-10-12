@@ -2,6 +2,19 @@
 // isométrica 2:1 que coincide con la cuadrícula del juego.
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import {
+  CASHIER_POSES,
+  CASHIER_VARIANTS,
+  CUSTOMER_VARIANTS,
+  DIRECTIONS,
+  IDLE_POSE,
+  REACH_POSE,
+  WALK_FRAMES,
+  cashierSpec,
+  customerSpec,
+  makeCharacter,
+  walkPose,
+} from './characters.js';
 import { SPRITES } from './models.js';
 
 /** Tamaño final de cada sprite. Una casilla mide 128 px de ancho (el doble que en el juego). */
@@ -89,4 +102,61 @@ window.renderSprites = () => {
     return { name, dataUrl: out.toDataURL('image/png') };
   });
 };
+
+// ---------------------------------------------------------------------------
+// Personajes: hojas de sprites con varios fotogramas y direcciones
+// ---------------------------------------------------------------------------
+
+/** Cada fotograma mide 80×120 px (el doble que en el juego) y los pies quedan al 90% de la altura. */
+const FRAME_W = 80;
+const FRAME_H = 120;
+const PX_PER_UNIT = SIZE / (2 * HALF_W);
+
+function characterCamera() {
+  const halfW = FRAME_W / 2 / PX_PER_UNIT;
+  const top = (FRAME_H * 0.9) / PX_PER_UNIT;
+  const bottom = -(FRAME_H * 0.1) / PX_PER_UNIT;
+  const camera = new THREE.OrthographicCamera(-halfW, halfW, top, bottom, 0.1, 100);
+  const elevation = Math.tan(Math.PI / 6) * Math.SQRT2;
+  camera.position.set(10, 10 * elevation, 10);
+  camera.lookAt(0, 0, 0);
+  return camera;
+}
+
+/** Hoja: filas = direcciones, columnas = poses. */
+function renderSheet(renderer, env, camera, spec, poses, directions) {
+  renderer.setSize(FRAME_W * SUPERSAMPLE, FRAME_H * SUPERSAMPLE);
+  const sheet = document.createElement('canvas');
+  sheet.width = FRAME_W * poses.length;
+  sheet.height = FRAME_H * directions.length;
+  const ctx = sheet.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  directions.forEach((angle, row) => {
+    poses.forEach((pose, col) => {
+      const s = scene(false, env);
+      const character = makeCharacter(spec, pose);
+      character.rotation.y = angle;
+      s.add(character);
+      renderer.render(s, camera);
+      ctx.drawImage(renderer.domElement, col * FRAME_W, row * FRAME_H, FRAME_W, FRAME_H);
+    });
+  });
+  return sheet.toDataURL('image/png');
+}
+
+window.renderSheets = () => {
+  const { renderer, env } = setup();
+  const camera = characterCamera();
+  const customerPoses = [...Array.from({ length: WALK_FRAMES }, (_, f) => walkPose(f)), IDLE_POSE, REACH_POSE];
+  const out = [];
+  for (let v = 0; v < CUSTOMER_VARIANTS; v++) {
+    out.push({ name: `people/customer-${v}`, dataUrl: renderSheet(renderer, env, camera, customerSpec(v), customerPoses, DIRECTIONS) });
+  }
+  // Los cajeros solo se ven de frente (mirando a los clientes, se voltean en el juego).
+  for (let v = 0; v < CASHIER_VARIANTS; v++) {
+    out.push({ name: `people/cashier-${v}`, dataUrl: renderSheet(renderer, env, camera, cashierSpec(v), CASHIER_POSES, [DIRECTIONS[0]]) });
+  }
+  return out;
+};
+
 window.ready = true;

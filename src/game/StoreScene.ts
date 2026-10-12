@@ -19,23 +19,29 @@ import { Effects } from './effects';
 import { formatTime } from './format';
 import { TILE_H, screenToIso, shade, type Point } from './iso';
 import {
+  CASHIER_VARIANTS,
+  CHARACTER_FRAME,
+  CUSTOMER_COLUMNS,
+  CUSTOMER_VARIANTS,
   FURNITURE_SPRITES,
-  PEOPLE,
-  STAFF,
   STREET_SPRITES,
   UI_SPRITES,
   decorSprite,
+  cashierSheet,
+  customerSheet,
   furnitureSprite,
   itemSprite,
-  personSprite,
-  staffSprite,
   streetSprite,
   uiSprite,
 } from './sprites';
 import { Street } from './street';
 
 const WALL_HEIGHT = 70;
-const PERSON_SIZE = 46;
+/** Los fotogramas de personajes son el doble del tamaño de juego y tienen los pies al 90%. */
+const CHARACTER_SCALE = 0.5;
+const CHARACTER_ORIGIN_Y = 0.9;
+/** Altura aproximada de la cabeza sobre los pies, en píxeles del juego. */
+const HEAD_TOP = 50;
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 2.6;
 const DRAG_THRESHOLD = 8;
@@ -131,21 +137,24 @@ interface RegisterView {
   container: Phaser.GameObjects.Container;
   g: Phaser.GameObjects.Graphics;
   body: Phaser.GameObjects.Image;
-  cashier: Phaser.GameObjects.Image;
-  staff: string;
+  cashier: Phaser.GameObjects.Sprite;
+  variant: number;
+  /** Hasta cuándo saluda tras cobrar (ms de la escena). */
+  waveUntil: number;
 }
+
+type Facing = 'front' | 'back';
 
 interface CustomerView {
   container: Phaser.GameObjects.Container;
   shadow: Phaser.GameObjects.Graphics;
-  body: Phaser.GameObjects.Image;
+  body: Phaser.GameObjects.Sprite;
   bag: Phaser.GameObjects.Image;
   crown: Phaser.GameObjects.Image;
   bubble: Phaser.GameObjects.Graphics;
   bubbleIcon: Phaser.GameObjects.Image;
-  person: string;
-  /** Avance del ciclo de paso; crece con la distancia recorrida. */
-  stride: number;
+  variant: number;
+  facing: Facing;
   flip: boolean;
   last: Point;
 }
@@ -190,18 +199,13 @@ export class StoreScene extends Phaser.Scene {
     for (const d of DECOR) this.load.image(`decor:${d.id}`, decorSprite(d.id));
     for (const name of UI_SPRITES) this.load.image(`ui:${name}`, uiSprite(name));
     for (const name of STREET_SPRITES) this.load.image(`street:${name}`, streetSprite(name));
-    for (const name of STAFF) {
-      this.load.image(`staff:${name}-idle`, staffSprite(name, 'idle'));
-      this.load.image(`staff:${name}-serve`, staffSprite(name, 'serve'));
-    }
+    for (let i = 0; i < CUSTOMER_VARIANTS; i++) this.load.spritesheet(`cust:${i}`, customerSheet(i), CHARACTER_FRAME);
+    for (let i = 0; i < CASHIER_VARIANTS; i++) this.load.spritesheet(`cash:${i}`, cashierSheet(i), CHARACTER_FRAME);
     for (const name of FURNITURE_SPRITES) this.load.image(`furn:${name}`, furnitureSprite(name));
-    for (const p of PEOPLE) {
-      this.load.image(`person:${p}-walking`, personSprite(p, 'walking'));
-      this.load.image(`person:${p}-standing`, personSprite(p, 'standing'));
-    }
   }
 
   create() {
+    this.createAnimations();
     this.floor = this.add.graphics().setDepth(-2);
     this.ghost = this.add.graphics().setDepth(900);
     this.ghostImage = this.add.image(0, 0, 'ui:package').setDepth(901).setVisible(false);
@@ -216,6 +220,23 @@ export class StoreScene extends Phaser.Scene {
     this.input.on('wheel', (_p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) => {
       this.setZoom(this.userZoom * (dy > 0 ? 0.9 : 1.1));
     });
+  }
+
+  /** Animaciones de las hojas de personajes (ver sprites.ts para el orden de los fotogramas). */
+  private createAnimations() {
+    const frames = (key: string, list: number[]) => list.map((frame) => ({ key, frame }));
+    const walk = [0, 1, 2, 3, 4, 5, 6, 7];
+    for (let i = 0; i < CUSTOMER_VARIANTS; i++) {
+      const key = `cust:${i}`;
+      this.anims.create({ key: `${key}:walk-front`, frames: frames(key, walk), frameRate: 11, repeat: -1 });
+      this.anims.create({ key: `${key}:walk-back`, frames: frames(key, walk.map((f) => f + CUSTOMER_COLUMNS)), frameRate: 11, repeat: -1 });
+    }
+    for (let i = 0; i < CASHIER_VARIANTS; i++) {
+      const key = `cash:${i}`;
+      this.anims.create({ key: `${key}:idle`, frames: frames(key, [0, 1]), frameRate: 1.5, repeat: -1, yoyo: true });
+      this.anims.create({ key: `${key}:scan`, frames: frames(key, [2, 3, 4, 3]), frameRate: 7, repeat: -1 });
+      this.anims.create({ key: `${key}:wave`, frames: frames(key, [5, 6]), frameRate: 5, repeat: -1 });
+    }
   }
 
   update(time: number, delta: number) {
@@ -533,11 +554,13 @@ export class StoreScene extends Phaser.Scene {
   private createRegister(r: Register): RegisterView {
     const g = this.add.graphics();
     // Cada caja tiene su cajero, elegido según su id para que no cambie al recargar.
-    const staff = STAFF[(r.id * 7) % STAFF.length];
-    const cashier = this.add.image(0, 0, `staff:${staff}-idle`).setOrigin(0.5, 0.95);
+    const variant = (r.id * 7) % CASHIER_VARIANTS;
+    // Los cajeros miran hacia delante (+y, abajo a la izquierda): la hoja mira a la derecha, así que se voltea.
+    const cashier = this.add.sprite(0, 0, `cash:${variant}`).setOrigin(0.5, CHARACTER_ORIGIN_Y).setScale(CHARACTER_SCALE).setFlipX(true);
+    cashier.play(`cash:${variant}:idle`);
     const body = this.add.image(0, 0, 'furn:register').setOrigin(0.5, FURNITURE_ORIGIN_Y).setDisplaySize(FURNITURE_SIZE, FURNITURE_SIZE);
     const container = this.add.container(0, 0, [g, cashier, body]);
-    const view = { container, g, body, cashier, staff };
+    const view = { container, g, body, cashier, variant, waveUntil: 0 };
     this.registers.set(r.id, view);
     return view;
   }
@@ -549,15 +572,11 @@ export class StoreScene extends Phaser.Scene {
     if (selected) diamond(v.g, r.x, r.y, r.x + 1, r.y + 1, 0xffd166, 0.6);
     const c = tileCenter(r.x, r.y);
     v.body.setPosition(c.x, c.y).setTint(selected ? 0xfff3b0 : 0xffffff);
-    // El cajero está detrás del mostrador; al cobrar levanta la mano y da un saltito.
-    const serving = r.serveTimer > 0;
-    const key = `staff:${v.staff}-${serving ? 'serve' : 'idle'}`;
-    if (v.cashier.texture.key !== key) v.cashier.setTexture(key);
-    const scale = 44 / v.cashier.width;
+    // Detrás del mostrador: escanea mientras cobra y saluda un momento al terminar.
+    const anim = time < v.waveUntil ? 'wave' : r.serveTimer > 0 ? 'scan' : 'idle';
+    v.cashier.play(`cash:${v.variant}:${anim}`, true);
     const back = at(r.x + 0.5, r.y + 0.08);
-    v.cashier
-      .setPosition(back.x, back.y - (serving ? Math.abs(Math.sin(time / 110)) * 2 : 0))
-      .setScale(scale, scale * (1 + Math.sin(time / 400 + r.id) * 0.015));
+    v.cashier.setPosition(back.x, back.y);
   }
 
   // -------------------------------------------------------------------------
@@ -684,55 +703,67 @@ export class StoreScene extends Phaser.Scene {
   }
 
   private createCustomer(c: Customer): CustomerView {
-    const person = PEOPLE[c.look % PEOPLE.length];
+    const variant = c.look % CUSTOMER_VARIANTS;
     const shadow = this.add.graphics();
-    const body = this.add.image(0, 0, `person:${person}-walking`).setOrigin(0.5, 0.96);
-    body.setDisplaySize(PERSON_SIZE, PERSON_SIZE);
-    const bag = this.add.image(0, 0, 'ui:bags').setDisplaySize(18, 18).setOrigin(0.5, 1).setVisible(false);
+    const body = this.add.sprite(0, 0, `cust:${variant}`, 8).setOrigin(0.5, CHARACTER_ORIGIN_Y).setScale(CHARACTER_SCALE);
+    const bag = this.add.image(0, 0, 'ui:bags').setDisplaySize(16, 16).setOrigin(0.5, 1).setVisible(false);
     const crown = this.add.image(0, 0, 'ui:crown').setDisplaySize(18, 18).setVisible(c.vip);
     const bubble = this.add.graphics();
     const bubbleIcon = this.add.image(0, 0, 'ui:question').setDisplaySize(16, 16).setVisible(false);
     const container = this.add.container(0, 0, [shadow, body, bag, crown, bubble, bubbleIcon]);
-    const view: CustomerView = { container, shadow, body, bag, crown, bubble, bubbleIcon, person, stride: 0, flip: false, last: { x: c.x, y: c.y } };
+    const view: CustomerView = { container, shadow, body, bag, crown, bubble, bubbleIcon, variant, facing: 'front', flip: false, last: { x: c.x, y: c.y } };
     this.customers.set(c.id, view);
     return view;
+  }
+
+  /**
+   * Hacia dónde mira alguien que se mueve (o mira) en la dirección (dx, dy) de la cuadrícula.
+   * Las hojas tienen dos vistas, de frente (abajo a la derecha) y de espaldas (arriba a la
+   * derecha); las otras dos se consiguen volteando el sprite.
+   */
+  private facingFor(dx: number, dy: number): { facing: Facing; flip: boolean } {
+    const sx = dx - dy;
+    const sy = dx + dy;
+    return { facing: sy >= 0 ? 'front' : 'back', flip: sx < 0 };
   }
 
   private updateCustomer(v: CustomerView, c: Customer, time: number) {
     const s = this.controller.state;
     const p = tileCenter(c.x, c.y);
-    const prev = tileCenter(v.last.x, v.last.y);
-    const moved = Math.hypot(p.x - prev.x, p.y - prev.y);
-    const walking = moved > 0.05;
+    const dx = c.x - v.last.x;
+    const dy = c.y - v.last.y;
+    const walking = Math.hypot(dx, dy) > 0.001;
     v.last = { x: c.x, y: c.y };
 
-    // Los sprites caminando miran a la izquierda: los volteamos al ir hacia la derecha.
-    if (walking && Math.abs(p.x - prev.x) > 0.05) v.flip = p.x > prev.x;
-    v.stride += moved * 0.22;
+    // Hacia dónde mira: adonde camina; al mirar un estante, hacia él; en la cola, hacia la caja.
+    let look: { dx: number; dy: number } | null = walking ? { dx, dy } : null;
+    const display = s.displays.find((d) => d.id === c.displayId);
+    if (!walking && c.state === 'browsing' && display) look = { dx: display.x - c.x, dy: display.y - c.y };
+    if (!walking && c.state === 'queue') look = { dx: 0, dy: -1 };
+    if (look) Object.assign(v, this.facingFor(look.dx, look.dy));
 
-    const key = `person:${v.person}-${walking ? 'walking' : 'standing'}`;
-    if (v.body.texture.key !== key) v.body.setTexture(key);
-    const base = PERSON_SIZE / v.body.width;
-    const bob = walking ? Math.abs(Math.sin(v.stride)) * 3 : 0;
-    const breathe = walking ? 1 : 1 + Math.sin(time / 350 + c.id) * 0.02;
-    v.body
-      .setPosition(p.x, p.y - bob)
-      .setFlipX(walking && v.flip)
-      .setAngle(walking ? Math.sin(v.stride) * 4 : 0)
-      .setScale(base, base * breathe);
+    const row = v.facing === 'front' ? 0 : CUSTOMER_COLUMNS;
+    if (walking) {
+      v.body.play(`cust:${v.variant}:walk-${v.facing}`, true);
+    } else {
+      v.body.stop();
+      v.body.setFrame(row + (c.state === 'browsing' ? 9 : 8));
+    }
+    v.body.setPosition(p.x, p.y).setFlipX(v.flip);
 
     v.shadow.clear();
     if (c.vip) v.shadow.fillStyle(0xffd60a, 0.35).fillEllipse(p.x, p.y, 34, 13);
-    v.shadow.fillStyle(0x000000, 0.2).fillEllipse(p.x, p.y, 22 - bob * 1.5, 8);
-    v.crown.setPosition(p.x, p.y - PERSON_SIZE - 2 - bob);
+    v.shadow.fillStyle(0x000000, 0.2).fillEllipse(p.x, p.y, 20, 7);
+    v.crown.setPosition(p.x, p.y - HEAD_TOP - 6);
 
-    // Entran y salen difuminándose por los extremos de la acera.
+    // Entran y salen difuminándose por la acera.
     const { w } = this.size;
     const fromEdge = Math.min(c.x + 2, w + 1 - c.x);
     const fadeIn = Math.min(1, c.age / ENTRANCE_FADE);
     v.container.setAlpha(Phaser.Math.Clamp(Math.min(fromEdge / 0.8, fadeIn), 0, 1)).setDepth(c.x + c.y + 0.6);
 
-    v.bag.setVisible(c.carrying).setPosition(p.x + (v.flip ? 12 : -12), p.y - 6 - bob);
+    // La bolsa cuelga de la mano que queda hacia el espectador.
+    v.bag.setVisible(c.carrying).setPosition(p.x + (v.flip ? -9 : 9), p.y - 8);
 
     // Bocadillo: lo que busca, o una interrogación si no lo encuentra.
     const lostHere = c.state === 'lost' && c.path.length === 0 && c.y < sidewalkY(s) - 0.5;
@@ -741,7 +772,7 @@ export class StoreScene extends Phaser.Scene {
     v.bubbleIcon.setVisible(thinking);
     if (thinking) {
       const bx = p.x + 14;
-      const by = p.y - PERSON_SIZE - (c.vip ? 22 : 10) + Math.sin(time / 250 + c.id) * 1.5;
+      const by = p.y - HEAD_TOP - (c.vip ? 20 : 8) + Math.sin(time / 250 + c.id) * 1.5;
       v.bubble.fillStyle(0xffffff, 0.95).fillCircle(bx, by, 13).fillCircle(bx - 9, by + 13, 3).fillCircle(bx - 13, by + 18, 2);
       v.bubble.lineStyle(1, 0x000000, 0.15).strokeCircle(bx, by, 13);
       v.bubbleIcon.setTexture(lostHere ? 'ui:question' : `item:${c.itemId}`).setDisplaySize(18, 18).setPosition(bx, by);
@@ -769,6 +800,8 @@ export class StoreScene extends Phaser.Scene {
         if (!r) return;
         const c = tileCenter(r.x, r.y);
         this.fx.sale({ x: c.x, y: c.y - 40 }, e.amount, e.tip, e.gem, e.vip);
+        const view = this.registers.get(r.id);
+        if (view) view.waveUntil = this.time.now + 900;
         return;
       }
       case 'delivered': {

@@ -47,12 +47,17 @@ Desde la consola del navegador, `marketStreet.controller.state` muestra el estad
 
 ## Gráficos
 
-- **Muebles, cajas registradoras, decoración tipo mueble y quesos:** modelados en 3D para este juego en [`scripts/furniture/models.js`](scripts/furniture/models.js) (three.js). Se renderizan en vista isométrica 2:1, con luces y sombras, con:
+- **Muebles, cajas registradoras, decoración tipo mueble y quesos:** modelados en 3D para este juego en [`scripts/furniture/models.js`](scripts/furniture/models.js) (three.js) y renderizados en vista isométrica 2:1, con luces y sombras.
+- **Clientes, peatones y cajeros:** personajes 3D propios ([`scripts/furniture/characters.js`](scripts/furniture/characters.js)) en hojas de sprites animadas:
+  - 24 clientes distintos (piel, pelo, ropa, gafas, gorras, mochilas…), con ciclo de caminar de 8 fotogramas, de frente y de espaldas, más las poses quieto y alcanzar un estante.
+  - 6 cajeros con el uniforme de la tienda, que esperan, escanean al cobrar y saludan al terminar.
+
+  Todo lo modelado se genera con:
   ```bash
-  node scripts/render_furniture.mjs
+  node scripts/render_furniture.mjs                 # todo
+  node scripts/render_furniture.mjs --only=people   # solo personajes
   ```
-  Para cambiar un mueble, edita su modelo y vuelve a ejecutar el script.
-- **Productos, personas, coches, árboles e iconos:** [Microsoft Fluent Emoji](https://github.com/microsoft/fluentui-emoji) en estilo 3D, descargados y reducidos con:
+- **Productos, coches, árboles e iconos:** [Microsoft Fluent Emoji](https://github.com/microsoft/fluentui-emoji) en estilo 3D, descargados y reducidos con:
   ```bash
   python3 scripts/fetch_assets.py
   ```
@@ -60,4 +65,4 @@ Desde la consola del navegador, `marketStreet.controller.state` muestra el estad
 ## Créditos
 
 Los sprites de Fluent Emoji son © Microsoft Corporation, con licencia MIT ([`public/sprites/LICENSE-fluentui-emoji.txt`](public/sprites/LICENSE-fluentui-emoji.txt)).
-Los modelos 3D de `scripts/furniture/` y sus renders son parte de este proyecto.
+Los modelos 3D de `scripts/furniture/` (muebles, quesos y personajes) y sus renders son parte de este proyecto.

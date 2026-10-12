@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Renderiza los modelos 3D de scripts/furniture/models.js a public/sprites/ (muebles, decoración y quesos).
+// Renderiza los modelos 3D de scripts/furniture/ a public/sprites/: muebles, decoración, quesos
+// (models.js) y las hojas animadas de clientes y cajeros (characters.js).
 // Uso: node scripts/render_furniture.mjs   (necesita las devDependencies three y playwright)
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -30,7 +31,12 @@ await page.route(`${HOST}/**`, async (route) => {
 });
 await page.goto(`${HOST}/`);
 await page.waitForFunction(() => window.ready === true, null, { timeout: 30_000 });
-const sprites = await page.evaluate(() => window.renderSprites());
+// `--only=people` o `--only=furniture` para regenerar solo una parte.
+const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7);
+const sprites = [
+  ...(only !== 'people' ? await page.evaluate(() => window.renderSprites()) : []),
+  ...(only !== 'furniture' ? await page.evaluate(() => window.renderSheets()) : []),
+];
 for (const { name, dataUrl } of sprites) {
   const file = join(outDir, `${name}.png`);
   await mkdir(dirname(file), { recursive: true });
